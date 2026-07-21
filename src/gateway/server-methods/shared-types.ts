@@ -10,7 +10,6 @@ import type {
   ErrorShape,
   RequestFrame,
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
-import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { HealthSummary } from "../../commands/health.types.js";
@@ -48,6 +47,7 @@ import type {
   GatewayApprovalEventPublisher,
   GatewayRecoveryRuntime,
 } from "../server-instance-runtime.types.js";
+import type { GatewayModelCatalogSnapshot } from "../server-model-catalog.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { SessionObserverService } from "../session-observer-contract.js";
@@ -189,7 +189,7 @@ export type GatewayRequestContext = {
     agentDir?: string;
     readOnly?: boolean;
     workspaceDir?: string;
-  }) => Promise<ModelCatalogSnapshot>;
+  }) => Promise<GatewayModelCatalogSnapshot>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;
