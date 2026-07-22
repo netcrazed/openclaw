@@ -50,6 +50,15 @@
   "configContracts": {
     "compatibilityMigrationPaths": ["models.bedrockDiscovery"]
   },
+  "setup": {
+    "providers": [
+      {
+        "id": "amazon-bedrock",
+        "authMethods": ["aws-sdk-credential-chain"],
+        "envVars": ["AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_PROFILE"]
+      }
+    ]
+  },
   "uiHints": {
     "discovery": {
       "label": "Model Discovery",
