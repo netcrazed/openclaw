@@ -60,7 +60,6 @@ import {
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import {
   ownPreparedPluginGeneration,
-  recordPreparedPluginRegistrySuccessor,
   retainPreparedPluginRegistry,
 } from "./prepared-model-runtime.plugin-lifetime.js";
 import { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
@@ -554,9 +553,6 @@ async function runCatalogRequest(
     await work.runWhenIdle(() => undefined);
     if (acquiredGeneration) {
       const releasePrevious = prepared.release;
-      const previousRegistry = prepared.pluginGeneration.pluginRegistry;
-      const nextRegistry = acquiredGeneration.pluginGeneration.pluginRegistry;
-      recordPreparedPluginRegistrySuccessor(previousRegistry, nextRegistry);
       prepared.pluginGeneration = acquiredGeneration.pluginGeneration;
       prepared.pluginIds = acquiredGeneration.pluginIds;
       prepared.staticProviderIds = acquiredGeneration.staticProviderIds;
@@ -648,14 +644,6 @@ if (parentPort) {
           if (attempted && result.status === "ok") {
             contexts.set(workspaceDir, { fingerprint, prepared: attempted });
             attempted = undefined;
-            // Milestone 4: record the successor before releasing the predecessor so its
-            // eventual disposal excludes any instance still live in this new registry.
-            const previousRegistry = previous?.prepared.pluginGeneration.pluginRegistry;
-            const nextRegistry =
-              contexts.get(workspaceDir)?.prepared.pluginGeneration.pluginRegistry;
-            if (previousRegistry && nextRegistry) {
-              recordPreparedPluginRegistrySuccessor(previousRegistry, nextRegistry);
-            }
             // Acquire the replacement before releasing shared source registrations.
             await previous?.prepared.release();
             // Registry custody can retain this request's async context until retirement.

@@ -29,6 +29,7 @@ import {
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { getPluginCache } from "./plugin-cache.js";
+import { transferPluginInstanceOwner } from "./plugin-instance-scope.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import { projectPluginContributions } from "./registry-contributions.js";
@@ -410,6 +411,13 @@ export function loadOpenClawPluginsCore(
           retained.set(manifest.id, retention.record);
           if (retention.registry === options.borrowRegistry) {
             markPluginRecordBorrowed(registry, retention.record);
+          } else if (retention.registry === options.previousRegistry) {
+            // Strict successor handoff (not a concurrent loan): move disposal custody forward
+            // to this registry before the predecessor can be released, so a retiring
+            // predecessor cannot revoke an instance the successor is still relying on, and the
+            // instance still ends up disposed exactly once when some registry in the chain
+            // finally retires without a further successor.
+            transferPluginInstanceOwner(retention.record, registry);
           }
           projectPluginContributions(retention.registry, retention.record, registry);
         }

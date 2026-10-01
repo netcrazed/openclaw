@@ -46,43 +46,15 @@ const log = createSubsystemLogger("agents/prepared-model-runtime");
 type Lifetime = ReturnType<typeof createLifetime>;
 // Source and compiled consumers can share the same generation and registry objects.
 // Share only cleanup ownership; model/auth snapshots keep their existing module identity.
-const { generations, active, retirements, publications, registrySuccessors } =
-  resolveGlobalSingleton(Symbol.for("openclaw.preparedPluginLifetimes"), () => ({
+const { generations, active, retirements, publications } = resolveGlobalSingleton(
+  Symbol.for("openclaw.preparedPluginLifetimes"),
+  () => ({
     generations: new WeakMap<PreparedModelRuntimePluginGeneration, Lifetime>(),
     active: new Set<Lifetime>(),
     retirements: new Set<Promise<void>>(),
     publications: new WeakMap<object, { release: () => Promise<void> }>(),
-    // Milestone 4 (plugin pool spec, disposal-successor gap): when a registry is superseded by
-    // a newer one (e.g. the model-catalog worker promoting a scope-expanded build over its
-    // predecessor), record the successor here *before* the predecessor's refcount can reach
-    // zero. Disposal then excludes any instance still live in that successor, matching the same
-    // `retained` contract the Gateway's own reload path (`server-plugin-reload-cleanup.ts`) has
-    // always supplied to `disposePluginRegistryInstances`. Without this, a registry disposed
-    // while a successor still references shared plugin instances can tear down state the
-    // successor is actively relying on.
-    registrySuccessors: new WeakMap<PluginRegistry, PluginRegistry>(),
-  }));
-
-/**
- * Record that `next` supersedes `previous` for disposal purposes. Call this BEFORE releasing
- * custody of `previous` whenever a successor registry is promoted over it (see
- * `prepared-model-catalog.worker.ts`'s generation-promotion path for the first caller). Safe to
- * call even if `previous` never ends up retired through `retainPreparedPluginRegistry`.
- */
-export function recordPreparedPluginRegistrySuccessor(
-  previous: PluginRegistry,
-  next: PluginRegistry,
-): void {
-  if (previous === next) {
-    return;
-  }
-  const previousOwner = getPluginRegistryResourceOwner(previous);
-  const nextOwner = getPluginRegistryResourceOwner(next);
-  if (previousOwner === nextOwner) {
-    return;
-  }
-  registrySuccessors.set(previousOwner, nextOwner);
-}
+  }),
+);
 
 function createLifetime(dispose: () => Promise<unknown>, retainWork?: () => () => void) {
   const cleanupWork = new AsyncWorkScope();
@@ -154,43 +126,20 @@ export function retainPreparedPluginRegistry(
   registryView: PluginRegistry,
 ): (() => void | Promise<void>) | undefined {
   registerPreparedPluginLifetime();
-  // Milestone 4 fix (disposal-successor gap, real worker path): both of the worker's call sites
-  // (`prepared-model-catalog.worker.ts`) capture a predecessor's release closure from an EARLIER
-  // call to this function, then call `recordPreparedPluginRegistrySuccessor` only once the
-  // successor exists -- strictly AFTER this function already returned for the predecessor.
-  // Resolving the successor eagerly here (the first two fix attempts, in whichever branch) can
-  // therefore never see it: `registrySuccessors` is always empty for the predecessor at the time
-  // this function itself runs. The exclusion has to be resolved lazily, inside the returned
-  // release closure, at the moment it is actually invoked -- which happens after the successor
-  // has been recorded. All three branches below (`prepared`, bare `inspection`, and the
-  // `createLifetime`-owned path) ultimately bottom out in the same `PluginRegistryInspectionResources`
-  // instance's claim refcount reaching zero and invoking its `retire` callback (see
-  // `acquireRegistryResources` in `plugins/loader-runtime-load.ts`), which is the only place that
-  // actually calls `instance.dispose()` and the only place that consults `retainedInstances`.
-  // Wrapping each branch's release closure to resolve+apply the successor exclusion just before
-  // delegating to the real release is therefore correct and timing-safe for every real owner
-  // shape, including the worker's actual `PreparedModelRuntimeBuildResources`-wrapped path.
+  // Disposal custody for a `previousRegistry`-retained plugin now follows the record forward via
+  // `transferPluginInstanceOwner` at the moment it is retained (`loader-runtime-core.ts`), so
+  // every retire path here can trust the exact same `owner.registry` check it already used before
+  // the worker's scope-growth promotion existed: a registry only disposes instances it still
+  // currently owns, and some registry in the retention chain always ends up owning (and thus
+  // disposing) a reused instance exactly once. No successor bookkeeping is needed here.
   const owner = getPluginRegistryResourceOwner(registryView);
   const inspection = getPluginRegistryInspectionResources(registryView);
-  const applySuccessorExclusion = (): void => {
-    const successor = registrySuccessors.get(owner);
-    if (successor && inspection) {
-      inspection.retainInstancesFor(successor);
-    }
-  };
   const prepared = retainPreparedModelRuntimeSnapshotResources({ pluginRegistry: registryView });
   if (prepared) {
-    return () => {
-      applySuccessorExclusion();
-      return prepared.release();
-    };
+    return () => prepared.release();
   }
   if (inspection) {
-    const release = inspection.retain().release;
-    return () => {
-      applySuccessorExclusion();
-      return release();
-    };
+    return inspection.retain().release;
   }
   const registry = owner;
   let lifetime = getPluginRegistryLifetime(registry);
@@ -207,14 +156,7 @@ export function retainPreparedPluginRegistry(
     markPluginRegistryActive(registry);
     lifetime = createLifetime(async () => {
       try {
-        // Milestone 4 fix: supply the successor accessor so disposal excludes any instance
-        // still referenced by a registry that has since superseded this one (e.g. the
-        // model-catalog worker's scope-expansion promotion). Mirrors the Gateway reload path's
-        // own `disposePluginRegistryInstances(registry, previousRegistry)` call shape.
-        return await disposePluginRegistryInstances(
-          registry,
-          () => registrySuccessors.get(registry) ?? null,
-        );
+        return await disposePluginRegistryInstances(registry);
       } catch (error) {
         // Ordinary cleanup faults are result rows; rejection leaves a host prerequisite unfinished.
         throw new PluginRuntimeCloseRetainedError(error);

@@ -77,6 +77,25 @@ export function resolvePluginInstanceOwner(record: PluginRecord, registry: Plugi
   return owner;
 }
 
+/**
+ * Move disposal custody of a `previousRegistry`-retained record's instance forward to the
+ * registry that just retained it (strict successor handoff, not a concurrent loan). Call this at
+ * the moment a candidate record is projected into a new registry via `previousRegistry` reuse
+ * (see `resolvePluginRecordRetention` in `loader-runtime-core.ts`), BEFORE the predecessor can be
+ * released. Every disposal/activity consumer reads `owner.registry` as the current custodian
+ * (`getPluginRecordRegistry`, `isPluginRecordActive`, the inspection retire filter in
+ * `loader-runtime-load.ts`), so this single write keeps a reused instance from being torn down by
+ * a retiring predecessor while guaranteeing some registry in the chain still owns it for eventual
+ * disposal. Never used for `borrowRegistry` loans: a lender keeps permanent custody there while
+ * concurrent borrowers hold fenced views instead.
+ */
+export function transferPluginInstanceOwner(record: PluginRecord, registry: PluginRegistry): void {
+  const owner = pluginInstanceState.records.get(record);
+  if (owner && !owner.revoked) {
+    owner.registry = registry;
+  }
+}
+
 /** Record and resource keys resolve the same owner through adoption and failed registration. */
 export function getPluginInstanceOwner(
   instance: PluginInstanceResource,
