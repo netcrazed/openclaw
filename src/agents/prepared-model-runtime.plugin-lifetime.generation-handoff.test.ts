@@ -458,22 +458,24 @@ describe("previousRegistry-retained plugin instance ownership transfer", () => {
       // 4. Attempt build - should reject
       await expect(successorPromise).rejects.toThrow(buildError);
 
-      // 5. Verify predecessor still holds custody and instance is NOT disposed
-      // Even after a failed load attempt, the predecessor should still own the instance
-      expect(instance!.disposing).toBe(false);
-      expect(fixture.connection(0).instanceDisposals).toBe(initialDisposals);
-
-      // 6. Predecessor should still be able to use the instance
-      const predecessorCallResult = instance!.runInRegistry(predecessorRegistry, () => {
-        return "predecessor-call-after-failed-handoff-ok";
-      });
-      expect(predecessorCallResult).toBe("predecessor-call-after-failed-handoff-ok");
-
-      // 7. Clean up the failed successor resources
+      // 5. Clean up the failed successor resources FIRST
       await successorResources[Symbol.asyncDispose]().catch(() => undefined);
       successorResources = undefined;
 
-      // 8. Now release predecessor normally
+      // 6. IMMEDIATELY AFTER failed successor disposal, verify predecessor still has custody:
+      // - Instance is NOT disposing
+      // - A real registry operation through the predecessor still works
+      // - Disposal count is still 0 at this specific point
+      expect(instance!.disposing).toBe(false);
+      expect(fixture.connection(0).instanceDisposals).toBe(initialDisposals);
+
+      // Real registry operation through the predecessor
+      const predecessorCallResult = instance!.runInRegistry(predecessorRegistry, () => {
+        return "predecessor-call-after-failed-handoff-disposal-ok";
+      });
+      expect(predecessorCallResult).toBe("predecessor-call-after-failed-handoff-disposal-ok");
+
+      // 7. Now release predecessor normally
       await predecessorResources[Symbol.asyncDispose]();
       expect(instance!.disposing).toBe(true);
       expect(fixture.connection(0).instanceDisposals).toBe(initialDisposals + 1);
