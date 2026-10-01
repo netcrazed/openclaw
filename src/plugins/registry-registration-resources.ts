@@ -161,6 +161,17 @@ export class PluginRegistrationResourceSource {
     void this.#dispose(pluginId, entry, this.getRegistry?.());
   }
 
+  transferRegistration(pluginId: string, target: PluginRegistrationResourceSource): void {
+    const entry = this.#registrations.get(pluginId);
+    if (!entry) {
+      return; // Nothing to transfer
+    }
+    // Remove from this source and add to target
+    this.#registrations.delete(pluginId);
+    // Note: we don't need to clone the entry since we're moving ownership
+    target.#registrations.set(pluginId, entry);
+  }
+
   async #waitForRegistrations(): Promise<void> {
     while (this.#pending.size > 0) {
       await Promise.all(this.#pending);

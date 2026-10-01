@@ -147,6 +147,19 @@ export class PluginRegistryInspectionResources {
     return source === this || this.#dependencies.has(source);
   }
 
+  /** Transfers registration resources for a plugin to another inspection instance */
+  transferRegistrationTo(pluginId: string, target: PluginRegistryInspectionResources): void {
+    if (this.#release) {
+      throw new Error("Plugin inspection resources have been released");
+    }
+    if (target === this) {
+      return; // Nothing to transfer to self
+    }
+    // Access the source's transferRegistration method
+    // This assumes we're in the same module scope and can access private fields
+    this.#source.transferRegistration(pluginId, target.#source);
+  }
+
   /** Retains physical resources without extending this inspection's authority. */
   retain(): { release: () => Promise<void> } {
     if (this.#release) {
