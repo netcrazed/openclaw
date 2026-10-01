@@ -328,4 +328,158 @@ describe("previousRegistry-retained plugin instance ownership transfer", () => {
       await fixture.cleanup(predecessor);
     }
   });
+
+  it("transferred-then-disabled plugin correctly rejects stale authority via actual worker machinery (real PreparedModelRuntimeBuildResources path)", async () => {
+    const fixture = createInspectionFixture();
+    const predecessorResources = new PreparedModelRuntimeBuildResources(
+      retainPreparedPluginRegistry,
+    );
+    const successorResources = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
+    const thirdGenResources = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
+    try {
+      // 1. Load predecessor generation (first worker generation)
+      const predecessorRegistry = await predecessorResources.load(
+        { config: fixture.config, basePluginIds: [fixture.plugin.id], purpose: "model-catalog" },
+        () => {},
+      );
+      const predecessorRecord = predecessorRegistry.plugins.find(
+        (record) => record.id === fixture.plugin.id,
+      );
+      expect(predecessorRecord).toBeDefined();
+      const instance = getPluginInstance(predecessorRecord!);
+      expect(instance).toBeDefined();
+
+      // 2. Transfer to successor generation via real worker path (scope-growth promotion)
+      const successorRegistry = await successorResources.load(
+        {
+          config: fixture.config,
+          basePluginIds: [fixture.plugin.id],
+          reusableRegistry: predecessorRegistry,
+          purpose: "model-catalog",
+        },
+        () => {},
+      );
+      const successorRecord = successorRegistry.plugins.find(
+        (record) => record.id === fixture.plugin.id,
+      );
+      expect(successorRecord).toBeDefined();
+      // Verify the instance was transferred, not freshly loaded
+      expect(getPluginInstance(successorRecord!)).toBe(instance);
+
+      // 3. Release predecessor through actual worker disposal path
+      await predecessorResources[Symbol.asyncDispose]();
+
+      // 4. Perform an actual worker-callback-like operation through successor
+      // This simulates provider callback / transport boundary in real worker
+      const firstCallResult = instance!.runInRegistry(successorRegistry, () => {
+        return "first-real-worker-call-ok";
+      });
+      expect(firstCallResult).toBe("first-real-worker-call-ok");
+      expect(instance!.disposing).toBe(false);
+
+      // 5. Build third generation that DISABLES the plugin via same real worker machinery
+      const thirdGenRegistry = await thirdGenResources.load(
+        {
+          config: { plugins: { allow: [], load: { paths: [] }, slots: { memory: "none" } } },
+          basePluginIds: [fixture.plugin.id],
+          reusableRegistry: successorRegistry,
+          purpose: "model-catalog",
+        },
+        () => {},
+      );
+      // Plugin should NOT appear in third generation
+      expect(
+        thirdGenRegistry.plugins.find((record) => record.id === fixture.plugin.id),
+      ).toBeUndefined();
+
+      // 6. Release successor (plugin disabled, no further transfer)
+      await successorResources[Symbol.asyncDispose]();
+
+      // 7. Attempt to call through now-stale transferred authority
+      // This must be rejected BEFORE any I/O would happen
+      expect(() => {
+        instance!.runInRegistry(successorRegistry, () => {
+          // This would be the real worker I/O that should never be reached
+          throw new Error(
+            "must not reach real I/O on a transferred-then-disabled instance via worker path",
+          );
+        });
+      }).toThrow(PluginInstanceUnavailableError);
+
+      // 8. Verify disposal count
+      expect(fixture.connection(0).instanceDisposals).toBe(1);
+    } finally {
+      await thirdGenResources[Symbol.asyncDispose]().catch(() => undefined);
+      await successorResources[Symbol.asyncDispose]().catch(() => undefined);
+      await predecessorResources[Symbol.asyncDispose]().catch(() => undefined);
+    }
+  });
+
+  it("failed worker handoff (generation build throws after transfer) restores predecessor custody via real worker path", async () => {
+    const fixture = createInspectionFixture();
+    const predecessorResources = new PreparedModelRuntimeBuildResources(
+      retainPreparedPluginRegistry,
+    );
+    let successorResources: PreparedModelRuntimeBuildResources | undefined =
+      new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
+    try {
+      // 1. Load predecessor generation
+      const predecessorRegistry = await predecessorResources.load(
+        { config: fixture.config, basePluginIds: [fixture.plugin.id], purpose: "model-catalog" },
+        () => {},
+      );
+      const predecessorRecord = predecessorRegistry.plugins.find(
+        (record) => record.id === fixture.plugin.id,
+      );
+      expect(predecessorRecord).toBeDefined();
+      const instance = getPluginInstance(predecessorRecord!);
+      expect(instance).toBeDefined();
+
+      // 2. Record disposal count before attempting successor build
+      const initialDisposals = fixture.connection(0).instanceDisposals;
+
+      // 3. Start successor generation build that will throw partway through
+      // Simulate a worker generation build that throws during the build process
+      const buildError = new Error("Simulated worker generation build failure");
+      const successorPromise = successorResources.load(
+        {
+          config: fixture.config,
+          basePluginIds: [fixture.plugin.id],
+          reusableRegistry: predecessorRegistry,
+          purpose: "model-catalog",
+        },
+        () => {
+          // This callback simulates something happening during the build
+          // The system should handle rollback if transfer happened before this throw
+          throw buildError;
+        },
+      );
+
+      // 4. Attempt build - should reject
+      await expect(successorPromise).rejects.toThrow(buildError);
+
+      // 5. Verify predecessor still holds custody and instance is NOT disposed
+      // Even after a failed load attempt, the predecessor should still own the instance
+      expect(instance!.disposing).toBe(false);
+      expect(fixture.connection(0).instanceDisposals).toBe(initialDisposals);
+
+      // 6. Predecessor should still be able to use the instance
+      const predecessorCallResult = instance!.runInRegistry(predecessorRegistry, () => {
+        return "predecessor-call-after-failed-handoff-ok";
+      });
+      expect(predecessorCallResult).toBe("predecessor-call-after-failed-handoff-ok");
+
+      // 7. Clean up the failed successor resources
+      await successorResources[Symbol.asyncDispose]().catch(() => undefined);
+      successorResources = undefined;
+
+      // 8. Now release predecessor normally
+      await predecessorResources[Symbol.asyncDispose]();
+      expect(instance!.disposing).toBe(true);
+      expect(fixture.connection(0).instanceDisposals).toBe(initialDisposals + 1);
+    } finally {
+      await successorResources?.[Symbol.asyncDispose]().catch(() => undefined);
+      await predecessorResources[Symbol.asyncDispose]().catch(() => undefined);
+    }
+  });
 });
