@@ -231,6 +231,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
       }
     },
     read: runtime.read,
+    readModelsList: runtime.readModelsList,
     readStartup: runtime.readStartup,
     refresh: runtime.refresh,
   };
