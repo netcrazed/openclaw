@@ -558,11 +558,11 @@ async function runCatalogRequest(
     };
     work.beginClose();
     await work.runWhenIdle(() => undefined);
+    // On success, clear any rollbacks since the ownership transfer is now permanent
+    const registry = prepared.pluginGeneration.pluginRegistry;
+    // Clear rollbacks by removing them from the WeakMap
+    clearRegistryTransferRollbacks(registry);
     if (acquiredGeneration) {
-      // On success, clear any rollbacks since the ownership transfer is now permanent
-      const registry = acquiredGeneration.pluginGeneration.pluginRegistry;
-      // Clear rollbacks by removing them from the WeakMap
-      clearRegistryTransferRollbacks(registry);
       const releasePrevious = prepared.release;
       prepared.pluginGeneration = acquiredGeneration.pluginGeneration;
       prepared.pluginIds = acquiredGeneration.pluginIds;

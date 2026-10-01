@@ -214,6 +214,7 @@ export function loadOpenClawPluginsCore(
 
   context.cacheState.beginLoad(context.cacheKey);
   let registryBuilder: ReturnType<typeof createPluginRegistry> | undefined;
+  const transferRollbacks: Array<() => void> = [];
   try {
     // Module and runtime loading stay lazy for discovery-only or disabled-plugin paths.
     const loadPluginModule = createPluginModuleLoader({
@@ -315,7 +316,6 @@ export function loadOpenClawPluginsCore(
     });
     const inputs = new Map<string, PluginLoadInput>();
     const retained = new Map<string, PluginRegistry["plugins"][number]>();
-    const transferRollbacks: Array<() => void> = [];
     for (const candidate of orderedCandidates) {
       const manifest = manifestBySource.get(candidate.source);
       if (

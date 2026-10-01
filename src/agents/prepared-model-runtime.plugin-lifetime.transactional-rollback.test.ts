@@ -3,6 +3,7 @@ import { acquirePluginRegistryForInspection } from "../plugins/loader.js";
 import {
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
+  writePlugin,
 } from "../plugins/loader.test-fixtures.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createInspectionFixture } from "../plugins/registry-inspection.test-helpers.js";
@@ -27,7 +28,7 @@ describe("transactional ownership transfer rollback on generation failure", () =
     let predecessor: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
 
     try {
-      // Load predecessor generation
+      // Load predecessor generation with only the working plugin
       predecessor = await acquirePluginRegistryForInspection({ config: fixture.config });
       const predecessorRecord = predecessor.registry.plugins.find(
         (record) => record.id === fixture.plugin.id,
@@ -37,42 +38,50 @@ describe("transactional ownership transfer rollback on generation failure", () =
 
       // Record initial state
       const initialDisposals = fixture.connection(0).disposals;
+      const initialInstanceDisposals = fixture.connection(0).instanceDisposals;
 
-      // Try to load successor generation, but simulate a failure
-      // We'll create a scenario where the successor generation fails to build
-      // by providing invalid configuration that causes the load to fail
+      // Create a second plugin that will throw during registration
+      // This will cause the entire batch to fail
+      const failingPlugin = writePlugin({
+        id: "failing-plugin",
+        registration: `throw new Error("Plugin registration failed as test");`,
+      });
 
-      try {
-        // Attempt to load with configuration that should cause failure
-        // This simulates a generation build failure after transfer has occurred
-        await acquirePluginRegistryForInspection({
-          config: { ...fixture.config, invalid: "should cause failure" as any },
+      // Build config that includes BOTH plugins
+      const successorConfig = {
+        ...fixture.config,
+        plugins: {
+          ...fixture.config.plugins,
+          allow: [...fixture.config.plugins.allow, "failing-plugin"],
+          load: {
+            ...fixture.config.plugins.load,
+            paths: [...fixture.config.plugins.load.paths, failingPlugin.file],
+          },
+        },
+      };
+
+      // Attempt to load successor generation with both plugins
+      // The failing plugin should cause the entire load to reject
+      await expect(
+        acquirePluginRegistryForInspection({
+          config: successorConfig,
           previousRegistry: predecessor.registry,
-        });
-        // If we reach here, the test setup needs adjustment
-        // But with our fixture config, adding an invalid property shouldn't cause immediate failure
-        // For this test, we need a different approach to simulate failure
-      } catch (error) {
-        // Expected: generation build failed
-        // The rollback mechanism should have restored ownership to the predecessor
+          throwOnLoadError: true,
+        }),
+      ).rejects.toThrow("Plugin registration failed as test");
 
-        // Verify the predecessor instance is still usable
-        expect(instance!.disposing).toBe(false);
-
-        // Verify the disposer hasn't been called (instance wasn't disposed)
-        expect(fixture.connection(0).disposals).toBe(initialDisposals);
-
-        // A real call through the predecessor still works
-        expect(instance!.runInRegistry(predecessor!.registry, () => "predecessor-call-ok")).toBe(
-          "predecessor-call-ok",
-        );
-
-        return; // Test passes
-      }
-
-      // If we get here, the test setup didn't cause a failure as expected
-      // We'll still verify basic behavior
+      // Verify the predecessor instance is still owned by predecessor registry
+      // and hasn't been disposed
       expect(instance!.disposing).toBe(false);
+      expect(fixture.connection(0).disposals).toBe(initialDisposals);
+      expect(fixture.connection(0).instanceDisposals).toBe(initialInstanceDisposals);
+
+      // Verify a real resource-backed operation through the predecessor still works
+      const result = instance!.runInRegistry(predecessor!.registry, () => "predecessor-call-ok");
+      expect(result).toBe("predecessor-call-ok");
+
+      // Additional verification: the instance should still be usable
+      // This proves the transfer was rolled back properly
     } finally {
       await fixture.cleanup(predecessor);
     }
