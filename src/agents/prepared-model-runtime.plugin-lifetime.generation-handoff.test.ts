@@ -226,8 +226,9 @@ describe("previousRegistry-retained plugin instance ownership transfer", () => {
 
   it("rejects stale transferred authority before real I/O after transfer-then-disable sequence with resource-backed proof", async () => {
     useNoBundledPlugins();
-    // Create a counter to track actual resource access
-    let resourceAccessCount = 0;
+    // Track whether real database operations were executed
+    let realQueryExecutedCount = 0;
+    let realQueryResultValue: number | undefined;
 
     const fixture = createInspectionFixture();
     let predecessor: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
@@ -264,13 +265,18 @@ describe("previousRegistry-retained plugin instance ownership transfer", () => {
       predecessor = undefined;
 
       // 3. Perform an ACTUAL resource-backed operation through the successor's instance
-      resourceAccessCount++;
+      // Execute a REAL SQL query against the fixture's actual SQLite database
       const firstOperationResult = successorInstance!.runInRegistry(successor.registry, () => {
-        // Simulate a real resource-backed operation
-        // The fixture has a real SQLite database that could be accessed here
-        return `real-operation-success-${resourceAccessCount}`;
+        // Access the real database connection and execute a real query
+        const connection = fixture.connection(0);
+        const result = connection.database.prepare("SELECT 42 AS value").get() as { value: number };
+        realQueryExecutedCount++;
+        realQueryResultValue = result.value;
+        return `real-operation-success-${result.value}`;
       });
-      expect(firstOperationResult).toBe(`real-operation-success-${resourceAccessCount}`);
+      expect(firstOperationResult).toBe(`real-operation-success-42`);
+      expect(realQueryExecutedCount).toBe(1);
+      expect(realQueryResultValue).toBe(42);
       expect(successorInstance!.disposing).toBe(false);
 
       // 4. Disable the plugin in a third generation
@@ -290,20 +296,28 @@ describe("previousRegistry-retained plugin instance ownership transfer", () => {
       const releasedSuccessorRegistry = successor.registry;
       successor = undefined;
 
-      // 5. Track resource access count before attempting the operation again
-      const resourceAccessBeforeSecondAttempt = resourceAccessCount;
+      // 5. Track real query execution count before attempting the operation again
+      const queryExecutedBeforeSecondAttempt = realQueryExecutedCount;
 
       // Attempt the SAME resource-backed operation again
       // This should be rejected BEFORE touching the real resource again
       expect(() =>
         successorInstance!.runInRegistry(releasedSuccessorRegistry, () => {
-          resourceAccessCount++; // This should NOT be reached
+          // This real database operation should NEVER be reached
+          // If the authority check passes (which it shouldn't), we would execute a real query
+          const connection = fixture.connection(0);
+          const result = connection.database.prepare("SELECT 99 AS value").get() as {
+            value: number;
+          };
+          realQueryExecutedCount++;
+          // We should never reach this point, so we throw an error if we do
           throw new Error("must not reach real I/O on a transferred-then-disabled instance");
         }),
       ).toThrow(PluginInstanceUnavailableError);
 
-      // Verify the resource was NOT accessed again
-      expect(resourceAccessCount).toBe(resourceAccessBeforeSecondAttempt);
+      // Verify the real database query was NOT executed again
+      expect(realQueryExecutedCount).toBe(queryExecutedBeforeSecondAttempt);
+      expect(realQueryExecutedCount).toBe(1); // Only the first query should have executed
 
       // Verify the instance is now marked as disposing
       expect(successorInstance!.disposing).toBe(true);
