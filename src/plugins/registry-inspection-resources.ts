@@ -35,7 +35,7 @@ export class PluginRegistryInspectionResources {
   readonly #retainedInstances = new Set<object>();
   readonly #source = new PluginRegistrationResourceSource(
     () => this.retire(this.#registry, this.#rollbackInstances, this.#retainedInstances),
-    this.#registry,
+    () => this.#registry, // <-- FIXED: changed from this.#registry to () => this.#registry
   );
   readonly #claim = this.#source.acquireClaim("inspection");
   readonly #registries = new Set<PluginRegistry>();

@@ -25,7 +25,7 @@ export class PluginRegistrationResourceSource {
 
   constructor(
     private readonly retire: (currentRegistry?: PluginRegistry) => Promise<void>,
-    private readonly registry?: PluginRegistry,
+    private readonly getRegistry?: () => PluginRegistry | undefined,
   ) {}
 
   acquireClaim(owner: "inspection" | "borrower"): { release: () => Promise<Error[]> } {
@@ -48,7 +48,7 @@ export class PluginRegistrationResourceSource {
               .filter(([, entry]) => (entry.rolledBack ? owner === "inspection" : last));
             // Queue the whole batch before any signal's awaited cleanup can reach disposal.
             const disposals = entries.map(([pluginId, entry]) =>
-              this.#dispose(pluginId, entry, this.registry),
+              this.#dispose(pluginId, entry, this.getRegistry?.()),
             );
             await this.#waitForRegistrations();
             const outcomes = await Promise.allSettled(disposals);
@@ -63,7 +63,7 @@ export class PluginRegistrationResourceSource {
               // the final physical claim retires the shared instances and cache.
               await Promise.allSettled(
                 [...this.#registrations].map(([pluginId, entry]) =>
-                  this.#dispose(pluginId, entry, this.registry),
+                  this.#dispose(pluginId, entry, this.getRegistry?.()),
                 ),
               );
               try {
@@ -158,7 +158,7 @@ export class PluginRegistrationResourceSource {
     const entry = this.#registration(pluginId);
     entry.rolledBack = true;
     entry.retire ??= retire;
-    void this.#dispose(pluginId, entry, this.registry);
+    void this.#dispose(pluginId, entry, this.getRegistry?.());
   }
 
   async #waitForRegistrations(): Promise<void> {
@@ -197,12 +197,13 @@ export class PluginRegistrationResourceSource {
           () =>
             entry.work.track(async () => {
               entry.disposalStarted = true;
-              const disposers = entry.disposers.splice(0);
               // Check if any instance of this plugin in current registry has been transferred away
               const shouldDispose =
                 !currentRegistry ||
                 this.#shouldDisposeResourcesForPlugin(pluginId, currentRegistry);
               if (shouldDispose) {
+                // Remove and dispose all disposers
+                const disposers = entry.disposers.splice(0);
                 for (const { id, dispose } of disposers) {
                   try {
                     await dispose();
@@ -213,9 +214,8 @@ export class PluginRegistrationResourceSource {
                   }
                 }
               }
-              // If we didn't dispose (instance was transferred), still clear the disposers list
-              // so they won't be disposed later
-              entry.disposers = [];
+              // If we didn't dispose (instance was transferred), keep the disposers list
+              // so they can be disposed later by the registry that now owns the instance
             }),
         );
         try {
