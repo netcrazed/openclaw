@@ -568,6 +568,8 @@ async function runCatalogRequest(
       prepared.pluginIds = acquiredGeneration.pluginIds;
       prepared.staticProviderIds = acquiredGeneration.staticProviderIds;
       prepared.release = acquiredGeneration.release;
+      // Also clear rollbacks on the acquired generation's registry
+      clearRegistryTransferRollbacks(acquiredGeneration.pluginGeneration.pluginRegistry);
       acquiredGeneration = undefined;
       await releasePrevious();
     }

@@ -160,6 +160,10 @@ function resolveAgentRuntimePluginRegistryLoad(
     ...(previousRegistryForIncrementalReuse
       ? { previousRegistry: previousRegistryForIncrementalReuse }
       : {}),
+    // For model-catalog worker handoff, enable ownership transfer when reusing previous registry
+    ...(params.purpose === "model-catalog" && previousRegistryForIncrementalReuse
+      ? { transferInstanceOwnership: true }
+      : {}),
   };
 }
 
