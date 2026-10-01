@@ -354,6 +354,8 @@ async function runCatalogRequest(
       ...resolveAgentCredentialMapFromStore(authStore, { config: value.input.config }),
     };
     if (request.kind === "auth-refresh") {
+      // Clear any rollbacks since the ownership transfer is now permanent
+      clearRegistryTransferRollbacks(prepared.pluginGeneration.pluginRegistry);
       return {
         status: "ok",
         kind: "auth-refresh",

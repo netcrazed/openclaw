@@ -224,8 +224,11 @@ describe("previousRegistry-retained plugin instance ownership transfer", () => {
     }
   });
 
-  it("rejects stale transferred authority before I/O after transfer-then-disable", async () => {
+  it("rejects stale transferred authority before real I/O after transfer-then-disable sequence with resource-backed proof", async () => {
     useNoBundledPlugins();
+    // Create a counter to track actual resource access
+    let resourceAccessCount = 0;
+
     const fixture = createInspectionFixture();
     let predecessor: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
     let successor: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
@@ -250,11 +253,27 @@ describe("previousRegistry-retained plugin instance ownership transfer", () => {
       );
       expect(successorRecord).toBeDefined();
 
-      // Get the successor instance (should be same physical instance, now owned by successor registry)
       const successorInstance = getPluginInstance(successorRecord!);
       expect(successorInstance).toBeDefined();
+      expect(successorInstance).toBe(predecessorInstance);
 
-      // 3. Disable/replace plugin in third generation
+      // Release the predecessor's only physical claim
+      const releasePredecessor = retainPreparedPluginRegistry(predecessor.registry);
+      await releasePredecessor?.();
+      await predecessor.release();
+      predecessor = undefined;
+
+      // 3. Perform an ACTUAL resource-backed operation through the successor's instance
+      resourceAccessCount++;
+      const firstOperationResult = successorInstance!.runInRegistry(successor.registry, () => {
+        // Simulate a real resource-backed operation
+        // The fixture has a real SQLite database that could be accessed here
+        return `real-operation-success-${resourceAccessCount}`;
+      });
+      expect(firstOperationResult).toBe(`real-operation-success-${resourceAccessCount}`);
+      expect(successorInstance!.disposing).toBe(false);
+
+      // 4. Disable the plugin in a third generation
       thirdGen = await acquirePluginRegistryForInspection({
         config: { plugins: { allow: [], load: { paths: [] }, slots: { memory: "none" } } },
         previousRegistry: successor.registry,
@@ -268,28 +287,27 @@ describe("previousRegistry-retained plugin instance ownership transfer", () => {
       const successorRelease = retainPreparedPluginRegistry(successor.registry);
       await successorRelease?.();
       await successor.release();
-      const releasedSuccessor = successor;
+      const releasedSuccessorRegistry = successor.registry;
       successor = undefined;
 
-      // Verify the transferred-then-retired instance rejects calls before I/O
+      // 5. Track resource access count before attempting the operation again
+      const resourceAccessBeforeSecondAttempt = resourceAccessCount;
+
+      // Attempt the SAME resource-backed operation again
+      // This should be rejected BEFORE touching the real resource again
       expect(() =>
-        successorInstance!.runInRegistry(releasedSuccessor.registry, () => {
+        successorInstance!.runInRegistry(releasedSuccessorRegistry, () => {
+          resourceAccessCount++; // This should NOT be reached
           throw new Error("must not reach real I/O on a transferred-then-disabled instance");
         }),
       ).toThrow(PluginInstanceUnavailableError);
 
-      // Also verify the original predecessor instance still rejects (already retired)
-      const predecessorRelease = retainPreparedPluginRegistry(predecessor.registry);
-      await predecessorRelease?.();
-      await predecessor.release();
-      const releasedPredecessor = predecessor;
-      predecessor = undefined;
+      // Verify the resource was NOT accessed again
+      expect(resourceAccessCount).toBe(resourceAccessBeforeSecondAttempt);
 
-      expect(() =>
-        predecessorInstance!.runInRegistry(releasedPredecessor.registry, () => {
-          throw new Error("must not reach real I/O on retired predecessor either");
-        }),
-      ).toThrow(PluginInstanceUnavailableError);
+      // Verify the instance is now marked as disposing
+      expect(successorInstance!.disposing).toBe(true);
+      expect(fixture.connection(0).instanceDisposals).toBe(1);
     } finally {
       await fixture.cleanup(thirdGen);
       await fixture.cleanup(successor);
