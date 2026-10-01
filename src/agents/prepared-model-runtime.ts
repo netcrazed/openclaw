@@ -457,6 +457,14 @@ export function markPreparedModelRuntimeSnapshotsStale(
     waitForReplacement?: boolean;
     preserveReplacementWait?: boolean;
     agentIds?: ReadonlySet<string>;
+    /**
+     * Whether to invalidate the shared plugin generation for owners in scope, forcing a full
+     * plugin rebuild on the next publish. Defaults to true to preserve legacy behavior for
+     * callers that don't opt out explicitly. Callers with no plugin-relevant change (secrets
+     * reload, chat-metadata polling, per-agent database startup reusing a captured
+     * pluginMetadataSnapshot) should pass `false`.
+     */
+    resetPluginGeneration?: boolean;
   } = {},
 ): PreparedModelRuntimeReplacementGateId | undefined {
   captureModelRuntimeLifetime();
@@ -480,7 +488,7 @@ export function markPreparedModelRuntimeSnapshotsStale(
   const staleError = new Error(reason);
   updateOwnersForScopedRefresh(owners, options.agentIds, staleError, {
     retireStandalone: true,
-    resetPluginGeneration: true,
+    resetPluginGeneration: options.resetPluginGeneration,
   });
   // Fence epochs and admission before cancellation can reenter a plugin callback.
   previousCancellation.abort(new PreparedModelRuntimePublicationSupersededError(reason));
@@ -541,6 +549,7 @@ export function refreshPreparedModelRuntimeSnapshots(
   markPreparedModelRuntimeSnapshotsStale(undefined, {
     waitForReplacement: true,
     agentIds: initialAgentIds,
+    resetPluginGeneration: options.resetPluginGeneration,
   });
   const requestEpoch = refreshRequestEpoch;
   const acquisitionSignal = refreshCancellation.signal;
@@ -577,7 +586,7 @@ export function refreshPreparedModelRuntimeSnapshots(
       // A lost external claim can leave partially built owners; fence them even without a successor.
       updateOwnersForScopedRefresh(owners, publicationAgentIds, error, {
         clearPending: true,
-        resetPluginGeneration: true,
+        resetPluginGeneration: options.resetPluginGeneration,
       });
     }
     rejectPendingPreparedModelRuntimeReplacement(replacement?.gateId, error);

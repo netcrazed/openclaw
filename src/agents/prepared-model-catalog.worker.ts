@@ -13,6 +13,7 @@ import type { Model } from "../llm/types.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { withPluginSourceCaptureDirectory } from "../plugins/plugin-package-metadata-capture.js";
 import { captureProviderCatalogExpiries } from "../plugins/provider-catalog-expiry.js";
 import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
@@ -59,6 +60,7 @@ import {
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import {
   ownPreparedPluginGeneration,
+  recordPreparedPluginRegistrySuccessor,
   retainPreparedPluginRegistry,
 } from "./prepared-model-runtime.plugin-lifetime.js";
 import { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
@@ -133,7 +135,56 @@ function restoreWorkerConfig(value: PreparedModelCatalogWorkerInput) {
   setRuntimeConfigSnapshot(value.input.config, value.sourceConfigForSecrets);
 }
 
-async function prepareWorkerGeneration(
+/**
+ * Default base plugin-id scope for a model-catalog worker generation.
+ *
+ * The static eligibility filter (`manifestPluginResolvesRuntimeModelCatalogAugment` +
+ * `isManifestPluginAvailableForControlPlane`) only covers plugins whose manifest declares
+ * model-catalog augmentation up front. Provider discovery can later prove that an *additional*
+ * plugin (one selected only via runtime credentials/config, not a static manifest flag) is
+ * required -- that is the scope-expansion branch in `runCatalogRequest`, which rebuilds via
+ * `prepareWorkerGeneration(value, prepared, pluginIds)`.
+ *
+ * Once that expanded build succeeds, its plugin-id set must keep being the *default* base scope
+ * for this workspace on every later call, even though `prepareWorkerGeneration` recomputes
+ * basePluginIds from scratch (no explicit `pluginIds`) on every fingerprint miss. Without this,
+ * the freshly recomputed static-only set is a strict subset of what the previously-built registry
+ * actually has loaded, so `reusableAgentRuntimeRegistry`'s exact containment check (registry ids
+ * == requested ids) can never match again -- forcing a full rebuild on every single call that
+ * needs the expanded scope, forever. This helper carries the previously-proven ids forward (only
+ * while they remain installed) so the default scope never regresses below what discovery already
+ * established.
+ */
+export function resolveWorkerGenerationBasePluginIds(params: {
+  metadata: PluginMetadataSnapshot;
+  config: PreparedModelCatalogWorkerInput["input"]["config"];
+  env: NodeJS.ProcessEnv;
+  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+  previousPluginIds?: ReadonlySet<string>;
+}): string[] {
+  const staticEligiblePluginIds = params.metadata.plugins
+    .filter(
+      (plugin) =>
+        manifestPluginResolvesRuntimeModelCatalogAugment(plugin) &&
+        isManifestPluginAvailableForControlPlane({
+          snapshot: params.metadata,
+          plugin,
+          config: params.config,
+          normalizedConfig: params.normalizedConfig,
+          ...(params.env ? { env: params.env } : {}),
+        }),
+    )
+    .map((plugin) => plugin.id);
+  const knownInstalledPluginIds = new Set(params.metadata.plugins.map((plugin) => plugin.id));
+  return [
+    ...new Set([
+      ...staticEligiblePluginIds,
+      ...[...(params.previousPluginIds ?? [])].filter((id) => knownInstalledPluginIds.has(id)),
+    ]),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
+export async function prepareWorkerGeneration(
   value: PreparedModelCatalogWorkerInput,
   previous?: WorkerGeneration,
   pluginIds?: readonly string[],
@@ -149,20 +200,13 @@ async function prepareWorkerGeneration(
   const normalizedConfig = normalizePluginsConfig(value.input.config.plugins);
   const basePluginIds =
     pluginIds ??
-    metadata.plugins
-      .filter(
-        (plugin) =>
-          manifestPluginResolvesRuntimeModelCatalogAugment(plugin) &&
-          isManifestPluginAvailableForControlPlane({
-            snapshot: metadata,
-            plugin,
-            config: value.input.config,
-            normalizedConfig,
-            ...(value.input.env ? { env: value.input.env } : {}),
-          }),
-      )
-      .map((plugin) => plugin.id)
-      .toSorted((left, right) => left.localeCompare(right));
+    resolveWorkerGenerationBasePluginIds({
+      metadata,
+      config: value.input.config,
+      env: value.input.env,
+      normalizedConfig,
+      previousPluginIds: previous?.pluginIds,
+    });
   await using resources = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
   const pluginRegistry = await resources.load(
     {
@@ -189,9 +233,13 @@ async function prepareWorkerGeneration(
     preparedStaticProviderCatalog: undefined,
     preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
   });
+  const finalPluginIds = new Set([
+    ...basePluginIds,
+    ...pluginRegistry.plugins.map((plugin) => plugin.id),
+  ]);
   return {
     pluginGeneration,
-    pluginIds: new Set([...basePluginIds, ...pluginRegistry.plugins.map((plugin) => plugin.id)]),
+    pluginIds: finalPluginIds,
     staticProviderIds: previous?.staticProviderIds ?? new Set(),
     release: ownPreparedPluginGeneration(pluginGeneration).retain(),
   };
@@ -506,6 +554,9 @@ async function runCatalogRequest(
     await work.runWhenIdle(() => undefined);
     if (acquiredGeneration) {
       const releasePrevious = prepared.release;
+      const previousRegistry = prepared.pluginGeneration.pluginRegistry;
+      const nextRegistry = acquiredGeneration.pluginGeneration.pluginRegistry;
+      recordPreparedPluginRegistrySuccessor(previousRegistry, nextRegistry);
       prepared.pluginGeneration = acquiredGeneration.pluginGeneration;
       prepared.pluginIds = acquiredGeneration.pluginIds;
       prepared.staticProviderIds = acquiredGeneration.staticProviderIds;
@@ -587,13 +638,24 @@ if (parentPort) {
                   if (previous?.fingerprint === fingerprint) {
                     return previous.prepared;
                   }
-                  return (attempted = await prepareWorkerGeneration(value));
+                  // A fingerprint miss still owns a live plugin registry: pass it through so
+                  // acquireAgentRuntimePluginRegistry can reuse it (avoiding a full rebuild)
+                  // whenever the plugin-id scope hasn't actually changed.
+                  return (attempted = await prepareWorkerGeneration(value, previous?.prepared));
                 }),
               ),
           );
           if (attempted && result.status === "ok") {
             contexts.set(workspaceDir, { fingerprint, prepared: attempted });
             attempted = undefined;
+            // Milestone 4: record the successor before releasing the predecessor so its
+            // eventual disposal excludes any instance still live in this new registry.
+            const previousRegistry = previous?.prepared.pluginGeneration.pluginRegistry;
+            const nextRegistry =
+              contexts.get(workspaceDir)?.prepared.pluginGeneration.pluginRegistry;
+            if (previousRegistry && nextRegistry) {
+              recordPreparedPluginRegistrySuccessor(previousRegistry, nextRegistry);
+            }
             // Acquire the replacement before releasing shared source registrations.
             await previous?.prepared.release();
             // Registry custody can retain this request's async context until retirement.
