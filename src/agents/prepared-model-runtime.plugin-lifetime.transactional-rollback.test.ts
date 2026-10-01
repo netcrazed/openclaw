@@ -66,6 +66,7 @@ describe("transactional ownership transfer rollback on generation failure", () =
         acquirePluginRegistryForInspection({
           config: successorConfig,
           previousRegistry: predecessor.registry,
+          transferInstanceOwnership: true,
           throwOnLoadError: true,
         }),
       ).rejects.toThrow("Plugin registration failed as test");
@@ -156,6 +157,7 @@ describe("transactional ownership transfer rollback on generation failure", () =
       successor = await acquirePluginRegistryForInspection({
         config: fixture.config,
         previousRegistry: predecessor.registry,
+        transferInstanceOwnership: true,
       });
       const successorRecord = successor.registry.plugins.find(
         (record) => record.id === fixture.plugin.id,

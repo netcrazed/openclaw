@@ -51,6 +51,7 @@ describe("registration resource transfer with instance ownership", () => {
       successor = await acquirePluginRegistryForInspection({
         config: fixture.config,
         previousRegistry: predecessor.registry,
+        transferInstanceOwnership: true,
       });
       const successorRecord = successor.registry.plugins.find(
         (record) => record.id === fixture.plugin.id,

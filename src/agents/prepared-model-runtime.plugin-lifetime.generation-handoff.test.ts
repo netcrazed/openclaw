@@ -119,6 +119,7 @@ describe("previousRegistry-retained plugin instance ownership transfer", () => {
       successor = await acquirePluginRegistryForInspection({
         config: fixture.config,
         previousRegistry: predecessor.registry,
+        transferInstanceOwnership: true,
       });
       const successorRecord = successor.registry.plugins.find(
         (record) => record.id === fixture.plugin.id,
@@ -199,6 +200,7 @@ describe("previousRegistry-retained plugin instance ownership transfer", () => {
       successor = await acquirePluginRegistryForInspection({
         config: { plugins: { allow: [], load: { paths: [] }, slots: { memory: "none" } } },
         previousRegistry: predecessor.registry,
+        transferInstanceOwnership: true,
       });
       expect(
         successor.registry.plugins.find((record) => record.id === fixture.plugin.id),
@@ -241,6 +243,7 @@ describe("previousRegistry-retained plugin instance ownership transfer", () => {
       successor = await acquirePluginRegistryForInspection({
         config: fixture.config,
         previousRegistry: predecessor.registry,
+        transferInstanceOwnership: true,
       });
       const successorRecord = successor.registry.plugins.find(
         (record) => record.id === fixture.plugin.id,
@@ -255,6 +258,7 @@ describe("previousRegistry-retained plugin instance ownership transfer", () => {
       thirdGen = await acquirePluginRegistryForInspection({
         config: { plugins: { allow: [], load: { paths: [] }, slots: { memory: "none" } } },
         previousRegistry: successor.registry,
+        transferInstanceOwnership: true,
       });
       expect(
         thirdGen.registry.plugins.find((record) => record.id === fixture.plugin.id),
