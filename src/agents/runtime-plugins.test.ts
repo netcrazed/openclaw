@@ -978,4 +978,40 @@ describe("agent runtime plugin registries", () => {
 
     expect(hoisted.loadPluginRegistryHandle).not.toHaveBeenCalled();
   });
+
+  it("reuses ordinary-agent registry containing superset of requested plugins", () => {
+    // Regression test for ordinary-agent superset reuse: when a reusable registry
+    // contains MORE plugins than currently requested (superset), ordinary agents
+    // should still reuse it (loose containment). This was broken when the
+    // .every() exact-match check was wrongly applied to ordinary agents.
+    const reusableRegistry = createEmptyPluginRegistry();
+    reusableRegistry.plugins.push(
+      createPluginRecord({ id: "plugin-a", imported: true }),
+      createPluginRecord({ id: "plugin-b", imported: true }),
+      createPluginRecord({ id: "plugin-c", imported: true }),
+    );
+
+    // Override the default mock to return plugin IDs based on basePluginIds
+    hoisted.resolveAgentRuntimePluginLoadPlan.mockReturnValue({
+      config: {},
+      pluginIds: ["plugin-a", "plugin-b"],
+    });
+
+    // Request only plugin-a and plugin-b (subset of what's loaded)
+    const registry = loadAgentRuntimePluginRegistryHandle({
+      config: {},
+      metadataSnapshot: createPluginMetadataSnapshot({
+        manifestRegistry: { plugins: [], diagnostics: [] },
+        workspaceDir: "/tmp/gateway-workspace",
+      }),
+      workspaceDir: "/tmp/workspace",
+      reusableRegistry,
+      basePluginIds: ["plugin-a", "plugin-b"],
+      // Not model-catalog (ordinary agent)
+    });
+
+    // Should reuse the existing registry without reloading
+    expect(registry).toBe(reusableRegistry);
+    expect(hoisted.loadPluginRegistryHandle).not.toHaveBeenCalled();
+  });
 });

@@ -178,9 +178,7 @@ function reusableAgentRuntimeRegistry(
   if (params.purpose === "model-catalog") {
     return undefined;
   }
-  return listRuntimePluginIdsFromRegistry(params.reusableRegistry).every((pluginId) =>
-    pluginIds.includes(pluginId),
-  ) && registryContainsRuntimePluginIds(params.reusableRegistry, pluginIds)
+  return registryContainsRuntimePluginIds(params.reusableRegistry, pluginIds)
     ? params.reusableRegistry
     : undefined;
 }
