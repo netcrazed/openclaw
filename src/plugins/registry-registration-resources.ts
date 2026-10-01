@@ -1,5 +1,6 @@
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
-import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 
 export type RegistrationDisposer = { id: string; dispose: () => void | Promise<void> };
 export type RegistrationCleanup = (run: () => Promise<void>) => Promise<void>;
@@ -22,7 +23,10 @@ export class PluginRegistrationResourceSource {
   #claims = 0;
   #closed = false;
 
-  constructor(private readonly retire: () => Promise<void>) {}
+  constructor(
+    private readonly retire: (currentRegistry?: PluginRegistry) => Promise<void>,
+    private readonly registry?: PluginRegistry,
+  ) {}
 
   acquireClaim(owner: "inspection" | "borrower"): { release: () => Promise<Error[]> } {
     if (this.#closed) {
@@ -43,7 +47,9 @@ export class PluginRegistrationResourceSource {
               // Construction owns rollback failures; the last claim owns successful entries.
               .filter(([, entry]) => (entry.rolledBack ? owner === "inspection" : last));
             // Queue the whole batch before any signal's awaited cleanup can reach disposal.
-            const disposals = entries.map(([pluginId, entry]) => this.#dispose(pluginId, entry));
+            const disposals = entries.map(([pluginId, entry]) =>
+              this.#dispose(pluginId, entry, this.registry),
+            );
             await this.#waitForRegistrations();
             const outcomes = await Promise.allSettled(disposals);
             // Callback faults resolve as rows; rejection leaves a cleanup prerequisite unfinished.
@@ -56,7 +62,9 @@ export class PluginRegistrationResourceSource {
               // Rollback errors belong to construction; join its work before
               // the final physical claim retires the shared instances and cache.
               await Promise.allSettled(
-                [...this.#registrations].map(([pluginId, entry]) => this.#dispose(pluginId, entry)),
+                [...this.#registrations].map(([pluginId, entry]) =>
+                  this.#dispose(pluginId, entry, this.registry),
+                ),
               );
               try {
                 await this.retire();
@@ -150,7 +158,7 @@ export class PluginRegistrationResourceSource {
     const entry = this.#registration(pluginId);
     entry.rolledBack = true;
     entry.retire ??= retire;
-    void this.#dispose(pluginId, entry);
+    void this.#dispose(pluginId, entry, this.registry);
   }
 
   async #waitForRegistrations(): Promise<void> {
@@ -165,7 +173,11 @@ export class PluginRegistrationResourceSource {
       .map((entry) => entry.work);
   }
 
-  #dispose(pluginId: string, entry: RegistrationResources): Promise<Error[]> {
+  #dispose(
+    pluginId: string,
+    entry: RegistrationResources,
+    currentRegistry?: PluginRegistry,
+  ): Promise<Error[]> {
     return (entry.disposal ??= Promise.resolve().then(async () => {
       const signalCleanup = async () => {
         entry.work.beginClose();
@@ -186,15 +198,24 @@ export class PluginRegistrationResourceSource {
             entry.work.track(async () => {
               entry.disposalStarted = true;
               const disposers = entry.disposers.splice(0);
-              for (const { id, dispose } of disposers) {
-                try {
-                  await dispose();
-                } catch (cause) {
-                  failures.push(
-                    new Error(`Plugin inspection disposal failed: ${pluginId}:${id}`, { cause }),
-                  );
+              // Check if any instance of this plugin in current registry has been transferred away
+              const shouldDispose =
+                !currentRegistry ||
+                this.#shouldDisposeResourcesForPlugin(pluginId, currentRegistry);
+              if (shouldDispose) {
+                for (const { id, dispose } of disposers) {
+                  try {
+                    await dispose();
+                  } catch (cause) {
+                    failures.push(
+                      new Error(`Plugin inspection disposal failed: ${pluginId}:${id}`, { cause }),
+                    );
+                  }
                 }
               }
+              // If we didn't dispose (instance was transferred), still clear the disposers list
+              // so they won't be disposed later
+              entry.disposers = [];
             }),
         );
         try {
@@ -214,5 +235,21 @@ export class PluginRegistrationResourceSource {
         }
       }
     }));
+  }
+
+  #shouldDisposeResourcesForPlugin(pluginId: string, currentRegistry: PluginRegistry): boolean {
+    // Check if any instance of this plugin in the current registry has been transferred away
+    // Look through all plugin records in the registry
+    for (const record of currentRegistry.plugins) {
+      if (record.id === pluginId) {
+        const instance = getPluginInstance(record);
+        if (instance && instance.owner?.registry === currentRegistry) {
+          // Instance is still owned by this registry, should dispose resources
+          return true;
+        }
+      }
+    }
+    // Either no instance found or all instances have been transferred away
+    return false;
   }
 }

@@ -30,15 +30,16 @@ function throwDisposalFailures(failures: Error[]): void {
 
 /** Owns only an explicitly acquired, uncached inspection's registration resources. */
 export class PluginRegistryInspectionResources {
+  #registry?: PluginRegistry;
   readonly #rollbackInstances = new Set<object>();
   readonly #retainedInstances = new Set<object>();
-  readonly #source = new PluginRegistrationResourceSource(() =>
-    this.retire(this.#registry, this.#rollbackInstances, this.#retainedInstances),
+  readonly #source = new PluginRegistrationResourceSource(
+    () => this.retire(this.#registry, this.#rollbackInstances, this.#retainedInstances),
+    this.#registry,
   );
   readonly #claim = this.#source.acquireClaim("inspection");
   readonly #registries = new Set<PluginRegistry>();
   readonly #dependencies = new WeakSet<PluginRegistryInspectionResources>();
-  #registry?: PluginRegistry;
   #adoptedInvocations?: PluginInvocationScope;
   #release?: Promise<void>;
 

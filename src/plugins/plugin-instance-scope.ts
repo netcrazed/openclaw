@@ -94,10 +94,25 @@ export function resolvePluginInstanceOwner(record: PluginRecord, registry: Plugi
  * disposal. Never used for `borrowRegistry` loans: a lender keeps permanent custody there while
  * concurrent borrowers hold fenced views instead.
  */
-export function transferPluginInstanceOwner(record: PluginRecord, registry: PluginRegistry): void {
+export function transferPluginInstanceOwner(
+  record: PluginRecord,
+  registry: PluginRegistry,
+  options?: { temporary?: boolean },
+): { rollback: () => void } | void {
   const owner = pluginInstanceState.records.get(record);
   if (owner && !owner.revoked) {
+    const previousRegistry = owner.registry;
     owner.registry = registry;
+
+    if (options?.temporary) {
+      return {
+        rollback: () => {
+          if (owner.registry === registry && !owner.revoked) {
+            owner.registry = previousRegistry;
+          }
+        },
+      };
+    }
   }
 }
 

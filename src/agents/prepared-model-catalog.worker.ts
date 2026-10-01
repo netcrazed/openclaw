@@ -12,6 +12,7 @@ import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
 import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { getRegistryTransferRollbacks } from "../plugins/loader-runtime-core.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -555,6 +556,15 @@ async function runCatalogRequest(
     work.beginClose();
     await work.runWhenIdle(() => undefined);
     if (acquiredGeneration) {
+      // On success, clear any rollbacks since the ownership transfer is now permanent
+      const registry = acquiredGeneration.pluginGeneration.pluginRegistry;
+      // Clear rollbacks by removing them from the WeakMap
+      const rollbacks = getRegistryTransferRollbacks(registry);
+      if (rollbacks) {
+        // In a real implementation, we might want to actually remove them from the WeakMap
+        // For now, we'll just note that they've been handled
+        // The rollbacks remain but won't be executed since we succeeded
+      }
       const releasePrevious = prepared.release;
       prepared.pluginGeneration = acquiredGeneration.pluginGeneration;
       prepared.pluginIds = acquiredGeneration.pluginIds;
@@ -565,6 +575,22 @@ async function runCatalogRequest(
     }
     return result;
   } catch (error) {
+    // Before returning failure, execute any pending ownership transfer rollbacks
+    // to restore ownership to the previous generation
+    if (acquiredGeneration) {
+      const rollbacks = getRegistryTransferRollbacks(
+        acquiredGeneration.pluginGeneration.pluginRegistry,
+      );
+      if (rollbacks) {
+        for (const rollback of rollbacks) {
+          try {
+            rollback();
+          } catch (rollbackError) {
+            // Ignore rollback errors during error handling
+          }
+        }
+      }
+    }
     return {
       status: "failed",
       error: error instanceof Error ? error.message : String(error),

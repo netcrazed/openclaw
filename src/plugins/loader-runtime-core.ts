@@ -61,6 +61,7 @@ type PluginLoadInput = {
   config: PreparedPluginConfig;
 };
 const registryInputs = new WeakMap<PluginRegistry, Map<string, PluginLoadInput>>();
+const registryTransferRollbacks = new WeakMap<PluginRegistry, Array<() => void>>();
 
 /** Captured JSON inputs ignore object key order, but preserve array order and values. */
 function samePluginLoadInput(left: string | undefined, right: string | undefined): boolean {
@@ -80,7 +81,14 @@ function resolvePluginRecordRetention(
   { previousRegistry, borrowRegistry }: PluginLoadOptions,
   pluginId: string,
   params: { signature?: string; borrowSignature?: string; replaced: boolean },
-): { registry: PluginRegistry; record: PluginRecord; input: PluginLoadInput } | undefined {
+):
+  | {
+      registry: PluginRegistry;
+      record: PluginRecord;
+      input: PluginLoadInput;
+      transferRollback?: { rollback: () => void };
+    }
+  | undefined {
   const previous = previousRegistry?.plugins.find((record) => record.id === pluginId);
   const previousInput = previousRegistry && registryInputs.get(previousRegistry)?.get(pluginId);
   if (
@@ -307,6 +315,7 @@ export function loadOpenClawPluginsCore(
     });
     const inputs = new Map<string, PluginLoadInput>();
     const retained = new Map<string, PluginRegistry["plugins"][number]>();
+    const transferRollbacks: Array<() => void> = [];
     for (const candidate of orderedCandidates) {
       const manifest = manifestBySource.get(candidate.source);
       if (
@@ -422,7 +431,13 @@ export function loadOpenClawPluginsCore(
             // predecessor cannot revoke an instance the successor is still relying on, and the
             // instance still ends up disposed exactly once when some registry in the chain
             // finally retires without a further successor.
-            transferPluginInstanceOwner(retention.record, registry);
+            const transferResult = transferPluginInstanceOwner(retention.record, registry, {
+              temporary: true,
+            });
+            if (transferResult) {
+              retention.transferRollback = transferResult;
+              transferRollbacks.push(transferResult.rollback);
+            }
           }
           projectPluginContributions(retention.registry, retention.record, registry);
         }
@@ -589,6 +604,9 @@ export function loadOpenClawPluginsCore(
       }
     }
     registryInputs.set(registry, inputs);
+    if (transferRollbacks.length > 0) {
+      registryTransferRollbacks.set(registry, transferRollbacks);
+    }
     return registry;
   } catch (error) {
     // Published generations retain their callbacks until retirement joins admitted users.
@@ -607,4 +625,10 @@ export function loadOpenClawPluginsCore(
   } finally {
     context.cacheState.finishLoad(context.cacheKey);
   }
+}
+
+export function getRegistryTransferRollbacks(
+  registry: PluginRegistry,
+): Array<() => void> | undefined {
+  return registryTransferRollbacks.get(registry);
 }
