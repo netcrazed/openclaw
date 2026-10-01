@@ -36,7 +36,7 @@ describe("transactional ownership transfer rollback on generation failure", () =
       expect(instance).toBeDefined();
 
       // Record initial state
-      const initialDisposerCallCount = fixture.connection(0).disposerCallCount;
+      const initialDisposals = fixture.connection(0).disposals;
 
       // Try to load successor generation, but simulate a failure
       // We'll create a scenario where the successor generation fails to build
@@ -60,7 +60,7 @@ describe("transactional ownership transfer rollback on generation failure", () =
         expect(instance!.disposing).toBe(false);
 
         // Verify the disposer hasn't been called (instance wasn't disposed)
-        expect(fixture.connection(0).disposerCallCount).toBe(initialDisposerCallCount);
+        expect(fixture.connection(0).disposals).toBe(initialDisposals);
 
         // A real call through the predecessor still works
         expect(instance!.runInRegistry(predecessor!.registry, () => "predecessor-call-ok")).toBe(
@@ -97,7 +97,7 @@ describe("transactional ownership transfer rollback on generation failure", () =
       expect(instance).toBeDefined();
 
       // Record initial state
-      const initialDisposerCallCount = fixture.connection(0).disposerCallCount;
+      const initialDisposals = fixture.connection(0).disposals;
 
       // Try to create successor with a configuration that simulates a mid-build failure
       // We'll intercept the load process
@@ -117,7 +117,7 @@ describe("transactional ownership transfer rollback on generation failure", () =
       // that are now part of the implementation
 
       expect(instance!.disposing).toBe(false);
-      expect(fixture.connection(0).disposerCallCount).toBe(initialDisposerCallCount);
+      expect(fixture.connection(0).disposals).toBe(initialDisposals);
     } finally {
       await fixture.cleanup(successorAttempt);
       await fixture.cleanup(predecessor);
@@ -141,7 +141,7 @@ describe("transactional ownership transfer rollback on generation failure", () =
       expect(instance).toBeDefined();
 
       // Record initial state
-      const initialDisposerCallCount = fixture.connection(0).disposerCallCount;
+      const initialDisposals = fixture.connection(0).disposals;
 
       // Load successor generation successfully
       successor = await acquirePluginRegistryForInspection({
@@ -161,7 +161,7 @@ describe("transactional ownership transfer rollback on generation failure", () =
 
       // Instance should still be alive (transfer completed successfully)
       expect(instance!.disposing).toBe(false);
-      expect(fixture.connection(0).disposerCallCount).toBe(initialDisposerCallCount);
+      expect(fixture.connection(0).disposals).toBe(initialDisposals);
 
       // Instance works in successor context
       expect(instance!.runInRegistry(successor.registry, () => "successor-call-ok")).toBe(
@@ -173,7 +173,7 @@ describe("transactional ownership transfer rollback on generation failure", () =
       successor = undefined;
 
       // Now disposer should be called (transfer was permanent, successor owned disposal)
-      expect(fixture.connection(0).disposerCallCount).toBe(initialDisposerCallCount + 1);
+      expect(fixture.connection(0).disposals).toBe(initialDisposals + 1);
     } finally {
       await fixture.cleanup(successor);
       await fixture.cleanup(predecessor);

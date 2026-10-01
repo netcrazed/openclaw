@@ -26,7 +26,6 @@ describe("registration resource transfer with instance ownership", () => {
 
     // Create a plugin that registers a real disposer (e.g., closes a database connection)
     let disposerCalled = false;
-    let disposerCallCount = 0;
 
     // We'll need to hook into the plugin's registration process
     // For this test, we'll use the existing fixture which already has a plugin
@@ -46,7 +45,7 @@ describe("registration resource transfer with instance ownership", () => {
 
       // The fixture's connection should have registered disposers during plugin load
       // We'll verify the disposer hasn't been called yet
-      expect(fixture.connection(0).disposerCallCount).toBe(0);
+      expect(fixture.connection(0).disposals).toBe(0);
 
       // Load successor generation, reusing predecessor registry
       successor = await acquirePluginRegistryForInspection({
@@ -70,14 +69,14 @@ describe("registration resource transfer with instance ownership", () => {
       // The real disposer should NOT have been called yet
       // When Finding A is fixed, the predecessor's cleanup should skip disposers
       // for transferred instances
-      expect(fixture.connection(0).disposerCallCount).toBe(0);
+      expect(fixture.connection(0).disposals).toBe(0);
 
       // Now release the successor
       await successor.release();
       successor = undefined;
 
       // Now the disposer should be called exactly once
-      expect(fixture.connection(0).disposerCallCount).toBe(1);
+      expect(fixture.connection(0).disposals).toBe(1);
     } finally {
       await fixture.cleanup(successor);
       await fixture.cleanup(predecessor);
@@ -103,7 +102,7 @@ describe("registration resource transfer with instance ownership", () => {
       inspection = undefined;
 
       // The disposer should be called (instance wasn't transferred)
-      expect(fixture.connection(0).disposerCallCount).toBe(1);
+      expect(fixture.connection(0).disposals).toBe(1);
     } finally {
       await fixture.cleanup(inspection);
     }
