@@ -221,4 +221,75 @@ describe("previousRegistry-retained plugin instance ownership transfer", () => {
       await fixture.cleanup(predecessor);
     }
   });
+
+  it("rejects stale transferred authority before I/O after transfer-then-disable", async () => {
+    useNoBundledPlugins();
+    const fixture = createInspectionFixture();
+    let predecessor: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
+    let successor: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
+    let thirdGen: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
+    try {
+      // 1. Load predecessor generation
+      predecessor = await acquirePluginRegistryForInspection({ config: fixture.config });
+      const predecessorRecord = predecessor.registry.plugins.find(
+        (record) => record.id === fixture.plugin.id,
+      );
+      const predecessorInstance = getPluginInstance(predecessorRecord!);
+      expect(predecessorInstance).toBeDefined();
+
+      // 2. Transfer to successor via retention (transferPluginInstanceOwner called)
+      successor = await acquirePluginRegistryForInspection({
+        config: fixture.config,
+        previousRegistry: predecessor.registry,
+      });
+      const successorRecord = successor.registry.plugins.find(
+        (record) => record.id === fixture.plugin.id,
+      );
+      expect(successorRecord).toBeDefined();
+
+      // Get the successor instance (should be same physical instance, now owned by successor registry)
+      const successorInstance = getPluginInstance(successorRecord!);
+      expect(successorInstance).toBeDefined();
+
+      // 3. Disable/replace plugin in third generation
+      thirdGen = await acquirePluginRegistryForInspection({
+        config: { plugins: { allow: [], load: { paths: [] }, slots: { memory: "none" } } },
+        previousRegistry: successor.registry,
+      });
+      expect(
+        thirdGen.registry.plugins.find((record) => record.id === fixture.plugin.id),
+      ).toBeUndefined();
+
+      // Release successor retention
+      const successorRelease = retainPreparedPluginRegistry(successor.registry);
+      await successorRelease?.();
+      await successor.release();
+      const releasedSuccessor = successor;
+      successor = undefined;
+
+      // Verify the transferred-then-retired instance rejects calls before I/O
+      expect(() =>
+        successorInstance!.runInRegistry(releasedSuccessor.registry, () => {
+          throw new Error("must not reach real I/O on a transferred-then-disabled instance");
+        }),
+      ).toThrow(PluginInstanceUnavailableError);
+
+      // Also verify the original predecessor instance still rejects (already retired)
+      const predecessorRelease = retainPreparedPluginRegistry(predecessor.registry);
+      await predecessorRelease?.();
+      await predecessor.release();
+      const releasedPredecessor = predecessor;
+      predecessor = undefined;
+
+      expect(() =>
+        predecessorInstance!.runInRegistry(releasedPredecessor.registry, () => {
+          throw new Error("must not reach real I/O on retired predecessor either");
+        }),
+      ).toThrow(PluginInstanceUnavailableError);
+    } finally {
+      await fixture.cleanup(thirdGen);
+      await fixture.cleanup(successor);
+      await fixture.cleanup(predecessor);
+    }
+  });
 });

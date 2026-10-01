@@ -12,7 +12,10 @@ import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
 import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
-import { getRegistryTransferRollbacks } from "../plugins/loader-runtime-core.js";
+import {
+  clearRegistryTransferRollbacks,
+  getRegistryTransferRollbacks,
+} from "../plugins/loader-runtime-core.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -559,12 +562,7 @@ async function runCatalogRequest(
       // On success, clear any rollbacks since the ownership transfer is now permanent
       const registry = acquiredGeneration.pluginGeneration.pluginRegistry;
       // Clear rollbacks by removing them from the WeakMap
-      const rollbacks = getRegistryTransferRollbacks(registry);
-      if (rollbacks) {
-        // In a real implementation, we might want to actually remove them from the WeakMap
-        // For now, we'll just note that they've been handled
-        // The rollbacks remain but won't be executed since we succeeded
-      }
+      clearRegistryTransferRollbacks(registry);
       const releasePrevious = prepared.release;
       prepared.pluginGeneration = acquiredGeneration.pluginGeneration;
       prepared.pluginIds = acquiredGeneration.pluginIds;
@@ -683,6 +681,21 @@ if (parentPort) {
             }
             return result;
           } finally {
+            // Before releasing a failed generation that didn't commit, roll back any ownership transfers
+            if (attempted && attempted.pluginGeneration?.pluginRegistry) {
+              const rollbacks = getRegistryTransferRollbacks(
+                attempted.pluginGeneration.pluginRegistry,
+              );
+              if (rollbacks) {
+                for (const rollback of rollbacks) {
+                  try {
+                    rollback();
+                  } catch {
+                    // Ignore rollback errors
+                  }
+                }
+              }
+            }
             await attempted?.release();
           }
         },

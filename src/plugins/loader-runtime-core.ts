@@ -621,6 +621,15 @@ export function loadOpenClawPluginsCore(
         }
       }
     }
+    // Roll back ownership transfers that happened before the error
+    for (const rollback of transferRollbacks) {
+      try {
+        rollback();
+      } catch {
+        // Don't let rollback failure obscure the original error
+        // Swallow rollback errors to maintain original error propagation
+      }
+    }
     throw error;
   } finally {
     context.cacheState.finishLoad(context.cacheKey);
@@ -631,4 +640,8 @@ export function getRegistryTransferRollbacks(
   registry: PluginRegistry,
 ): Array<() => void> | undefined {
   return registryTransferRollbacks.get(registry);
+}
+
+export function clearRegistryTransferRollbacks(registry: PluginRegistry): void {
+  registryTransferRollbacks.delete(registry);
 }

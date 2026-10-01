@@ -1,6 +1,7 @@
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
 
 export type RegistrationDisposer = { id: string; dispose: () => void | Promise<void> };
 export type RegistrationCleanup = (run: () => Promise<void>) => Promise<void>;
