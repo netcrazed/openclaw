@@ -31,8 +31,9 @@ function throwDisposalFailures(failures: Error[]): void {
 /** Owns only an explicitly acquired, uncached inspection's registration resources. */
 export class PluginRegistryInspectionResources {
   readonly #rollbackInstances = new Set<object>();
+  readonly #retainedInstances = new Set<object>();
   readonly #source = new PluginRegistrationResourceSource(() =>
-    this.retire(this.#registry, this.#rollbackInstances),
+    this.retire(this.#registry, this.#rollbackInstances, this.#retainedInstances),
   );
   readonly #claim = this.#source.acquireClaim("inspection");
   readonly #registries = new Set<PluginRegistry>();
@@ -45,6 +46,7 @@ export class PluginRegistryInspectionResources {
     private readonly retire: (
       registry: PluginRegistry | undefined,
       rollbackInstances: ReadonlySet<object>,
+      retainedInstances: ReadonlySet<object>,
     ) => Promise<void>,
   ) {}
 
@@ -75,6 +77,22 @@ export class PluginRegistryInspectionResources {
       this.#rollbackInstances.add(instance);
     }
     this.#source.rollback(pluginId, retire);
+  }
+
+  /**
+   * Exclude a successor registry's currently-loaded plugin instances from this inspection's
+   * eventual disposal finalizer. Call this before releasing a predecessor registry that has been
+   * superseded by `successorRegistry`, so instances the successor's own copied-forward records
+   * still point at are not torn down out from under it (disposal-successor gap; see
+   * `prepared-model-runtime.plugin-lifetime.ts`'s `retainPreparedPluginRegistry`).
+   */
+  retainInstancesFor(successorRegistry: PluginRegistry): void {
+    for (const record of successorRegistry.plugins) {
+      const instance = getPluginInstance(record);
+      if (instance) {
+        this.#retainedInstances.add(instance);
+      }
+    }
   }
 
   /** Copied callbacks keep their source through this inspection's final disposer. */

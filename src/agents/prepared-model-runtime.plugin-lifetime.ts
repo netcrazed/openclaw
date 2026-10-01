@@ -154,15 +154,45 @@ export function retainPreparedPluginRegistry(
   registryView: PluginRegistry,
 ): (() => void | Promise<void>) | undefined {
   registerPreparedPluginLifetime();
+  // Milestone 4 fix (disposal-successor gap, real worker path): both of the worker's call sites
+  // (`prepared-model-catalog.worker.ts`) capture a predecessor's release closure from an EARLIER
+  // call to this function, then call `recordPreparedPluginRegistrySuccessor` only once the
+  // successor exists -- strictly AFTER this function already returned for the predecessor.
+  // Resolving the successor eagerly here (the first two fix attempts, in whichever branch) can
+  // therefore never see it: `registrySuccessors` is always empty for the predecessor at the time
+  // this function itself runs. The exclusion has to be resolved lazily, inside the returned
+  // release closure, at the moment it is actually invoked -- which happens after the successor
+  // has been recorded. All three branches below (`prepared`, bare `inspection`, and the
+  // `createLifetime`-owned path) ultimately bottom out in the same `PluginRegistryInspectionResources`
+  // instance's claim refcount reaching zero and invoking its `retire` callback (see
+  // `acquireRegistryResources` in `plugins/loader-runtime-load.ts`), which is the only place that
+  // actually calls `instance.dispose()` and the only place that consults `retainedInstances`.
+  // Wrapping each branch's release closure to resolve+apply the successor exclusion just before
+  // delegating to the real release is therefore correct and timing-safe for every real owner
+  // shape, including the worker's actual `PreparedModelRuntimeBuildResources`-wrapped path.
+  const owner = getPluginRegistryResourceOwner(registryView);
+  const inspection = getPluginRegistryInspectionResources(registryView);
+  const applySuccessorExclusion = (): void => {
+    const successor = registrySuccessors.get(owner);
+    if (successor && inspection) {
+      inspection.retainInstancesFor(successor);
+    }
+  };
   const prepared = retainPreparedModelRuntimeSnapshotResources({ pluginRegistry: registryView });
   if (prepared) {
-    return prepared.release;
+    return () => {
+      applySuccessorExclusion();
+      return prepared.release();
+    };
   }
-  const inspection = getPluginRegistryInspectionResources(registryView);
   if (inspection) {
-    return inspection.retain().release;
+    const release = inspection.retain().release;
+    return () => {
+      applySuccessorExclusion();
+      return release();
+    };
   }
-  const registry = getPluginRegistryResourceOwner(registryView);
+  const registry = owner;
   let lifetime = getPluginRegistryLifetime(registry);
   if (!lifetime) {
     // Gateway-root and other externally activated registries remain borrowed.

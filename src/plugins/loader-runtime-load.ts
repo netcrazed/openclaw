@@ -110,39 +110,44 @@ async function acquireRegistryResources(
   load: (resources: PluginRegistryInspectionResources) => PluginRegistry,
 ): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
   const cache = createPluginCache();
-  const resources = new PluginRegistryInspectionResources(async (registry, rollbackInstances) => {
-    const instances = new Set(cache.instances);
-    for (const record of registry?.plugins ?? []) {
-      const instance = getPluginInstance(record);
-      // Borrowed records stay in the lending registry's custody.
-      if (instance && instance.owner?.registry === registry) {
-        instances.add(instance);
+  const resources = new PluginRegistryInspectionResources(
+    async (registry, rollbackInstances, retainedInstances) => {
+      const instances = new Set(cache.instances);
+      for (const record of registry?.plugins ?? []) {
+        const instance = getPluginInstance(record);
+        // Borrowed records stay in the lending registry's custody.
+        if (instance && instance.owner?.registry === registry) {
+          instances.add(instance);
+        }
       }
-    }
-    // Inspections own disposal, not host cleanup notifications or persistent session state.
-    // Rollback completions were already consumed by the collector before this finalizer.
-    const results = await Promise.allSettled(
-      [...instances]
-        .filter((instance) => !rollbackInstances.has(instance))
-        .map((instance) => instance.dispose()),
-    );
-    for (const instance of instances) {
-      releasePluginCacheInstance(instance, cache);
-    }
-    try {
-      await retirePluginCache(cache);
-    } catch (reason) {
-      results.push({ status: "rejected", reason });
-    }
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length) {
-      throw new PluginRuntimeCloseRetainedError(
-        new AggregateError(failures, "Plugin inspection instances failed to retire"),
+      // Inspections own disposal, not host cleanup notifications or persistent session state.
+      // Rollback completions were already consumed by the collector before this finalizer.
+      // Instances a successor registry still relies on (disposal-successor gap) stay live too.
+      const results = await Promise.allSettled(
+        [...instances]
+          .filter(
+            (instance) => !rollbackInstances.has(instance) && !retainedInstances.has(instance),
+          )
+          .map((instance) => instance.dispose()),
       );
-    }
-  });
+      for (const instance of instances) {
+        releasePluginCacheInstance(instance, cache);
+      }
+      try {
+        await retirePluginCache(cache);
+      } catch (reason) {
+        results.push({ status: "rejected", reason });
+      }
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length) {
+        throw new PluginRuntimeCloseRetainedError(
+          new AggregateError(failures, "Plugin inspection instances failed to retire"),
+        );
+      }
+    },
+  );
   try {
     inheritPluginNativeAdmissions(getPluginCache(), cache);
     const registry = withPluginCache(cache, () => load(resources));
