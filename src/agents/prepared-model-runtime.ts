@@ -116,7 +116,6 @@ const authPublication = new PreparedModelRuntimeAuthPublicationOwner();
 const getBlockingReplacement = () =>
   pendingModelRuntimeReplacement?.degraded ? undefined : pendingModelRuntimeReplacement;
 const getAdmissionReplacement = () => modelRuntimeDrain.pending ?? getBlockingReplacement();
-
 const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
   isGatewayLifecycleActive: () => gatewayLifecycleActive,
   getPendingOwnerPublication: (agentId) =>
@@ -128,7 +127,6 @@ const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
   getPendingReplacement: () => getAdmissionReplacement()?.promise,
 });
 export const loadPublishedGatewayReplyDispatchRuntime = replyDispatchPublication.load;
-
 let releaseProcessLifetime: (() => void) | undefined;
 function captureModelRuntimeLifetime(): () => void {
   const assertCurrent = capturePreparedModelRuntimeLifetime();
@@ -139,7 +137,6 @@ function captureModelRuntimeLifetime(): () => void {
   }
   return assertCurrent;
 }
-
 /** Seal refresh admission and cancel acquisition after every Gateway fences admission. */
 export function cancelPreparedModelRuntimeRefresh(): void {
   if (releaseProcessLifetime && refreshCancellation.signal.aborted) {
@@ -696,10 +693,7 @@ async function drainPendingAuthMutations(commit?: () => void): Promise<void> {
 }
 
 function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): void {
-  const normalizedEvent = {
-    ...event,
-    agentDir: normalizeOptionalDir(event.agentDir),
-  };
+  const normalizedEvent = { ...event, agentDir: normalizeOptionalDir(event.agentDir) };
   const { invalidatedOwners, invalidatedConfiguredAgentIds } =
     invalidatePreparedModelRuntimeOwnersForAuthMutation(owners, normalizedEvent);
   if (invalidatedOwners.length === 0) {
