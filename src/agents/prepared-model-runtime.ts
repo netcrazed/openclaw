@@ -96,16 +96,16 @@ const log = createSubsystemLogger("agents/prepared-model-runtime");
 const DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS = 120_000;
 let modelRuntimeBuildTimeoutMs = DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS;
 
-const owners = new Map<string, PreparedModelRuntimeOwner>();
-const agentBuildCompletions = new Map<string, Promise<void>>();
-const standaloneActivationTails = new Map<string, Promise<void>>();
-const retainedDirectRunOwners = new PreparedModelRuntimeOwnerRetention(1);
-const retainedGatewayRunOwners = new PreparedModelRuntimeOwnerRetention(8);
+const owners = new Map<string, PreparedModelRuntimeOwner>(),
+  agentBuildCompletions = new Map<string, Promise<void>>(),
+  standaloneActivationTails = new Map<string, Promise<void>>();
+const retainedDirectRunOwners = new PreparedModelRuntimeOwnerRetention(1),
+  retainedGatewayRunOwners = new PreparedModelRuntimeOwnerRetention(8);
 let gatewayLifecycleActive = false;
 const publicationQueue = new PreparedModelRuntimePublicationQueue();
-let refreshRequestEpoch = 0;
-let refreshCancellation = new AbortController();
-let pendingModelRuntimeReplacement: PreparedModelRuntimeReplacement | undefined;
+let refreshRequestEpoch = 0,
+  refreshCancellation = new AbortController(),
+  pendingModelRuntimeReplacement: PreparedModelRuntimeReplacement | undefined;
 const modelRuntimeDrain = createPreparedModelRuntimePluginDrain(
   () => {
     captureModelRuntimeLifetime();
