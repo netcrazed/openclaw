@@ -212,7 +212,7 @@ export class PluginRegistrationResourceSource {
               // Check if any instance of this plugin in current registry has been transferred away
               const shouldDispose =
                 !currentRegistry ||
-                this.#shouldDisposeResourcesForPlugin(pluginId, currentRegistry);
+                !this.#isInstanceOwnedByAnotherRegistry(pluginId, currentRegistry);
               if (shouldDispose) {
                 // Remove and dispose all disposers
                 const disposers = entry.disposers.splice(0);
@@ -249,19 +249,27 @@ export class PluginRegistrationResourceSource {
     }));
   }
 
-  #shouldDisposeResourcesForPlugin(pluginId: string, currentRegistry: PluginRegistry): boolean {
-    // Check if any instance of this plugin in the current registry has been transferred away
-    // Look through all plugin records in the registry
+  /**
+   * Determines whether cleanup should skip disposal because the plugin's managed
+   * instance has been transferred to a different registry's ownership. Registrations
+   * with no managed instance at all (e.g. lifecycle-only disposers registered via
+   * registry-registrars-host.ts) have no successor to transfer ownership to, so they
+   * must never be skipped here.
+   */
+  #isInstanceOwnedByAnotherRegistry(pluginId: string, currentRegistry: PluginRegistry): boolean {
+    // Look through all plugin records in the registry for a transferred-away instance.
     for (const record of currentRegistry.plugins) {
       if (record.id === pluginId) {
         const instance = getPluginInstance(record);
-        if (instance && instance.owner?.registry === currentRegistry) {
-          // Instance is still owned by this registry, should dispose resources
+        if (instance && instance.owner && instance.owner.registry !== currentRegistry) {
+          // Instance exists but ownership moved to a different registry: the successor
+          // registry now owns disposal, so skip here.
           return true;
         }
       }
     }
-    // Either no instance found or all instances have been transferred away
+    // Either no instance exists for this plugin, or the instance is still owned by
+    // this registry: in both cases, disposal should proceed here.
     return false;
   }
 }
