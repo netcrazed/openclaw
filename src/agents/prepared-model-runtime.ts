@@ -95,7 +95,6 @@ const log = createSubsystemLogger("agents/prepared-model-runtime");
 // deadline; the completion chain continues to own acquisition and serialization.
 const DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS = 120_000;
 let modelRuntimeBuildTimeoutMs = DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS;
-
 const owners = new Map<string, PreparedModelRuntimeOwner>(),
   agentBuildCompletions = new Map<string, Promise<void>>(),
   standaloneActivationTails = new Map<string, Promise<void>>();
