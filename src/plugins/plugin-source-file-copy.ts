@@ -10,6 +10,13 @@ export function hasKnownPluginFileIdentity(identity: FileIdentity): boolean {
   return identity.dev !== 0n && identity.ino !== 0n;
 }
 
+function sameCurrentPluginFileIdentity(left: FileIdentity, right: FileIdentity): boolean {
+  // Match fs-safe's Windows identity semantics for active-path assertions: antivirus/indexer
+  // contention can temporarily report dev/ino as zero for a legitimate path observation.
+  // Cleanup remains stricter below so an unknown identity never authorizes deleting a name.
+  return fsSafeAdvanced.sameFileIdentity(left, right);
+}
+
 function sameKnownIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return hasKnownPluginFileIdentity(left) && left.dev === right.dev && left.ino === right.ino;
 }
@@ -36,7 +43,10 @@ function assertOwnedPluginCopyTargetCurrent(
 ): void {
   const current = fs.fstatSync(fd, { bigint: true });
   const named = fs.statSync(target, { bigint: true });
-  if (!sameKnownIdentity(current, identity) || !sameKnownIdentity(named, identity)) {
+  if (
+    !sameCurrentPluginFileIdentity(current, identity) ||
+    !sameCurrentPluginFileIdentity(named, identity)
+  ) {
     throw new FsSafeError("path-mismatch", "copy destination changed");
   }
 }
