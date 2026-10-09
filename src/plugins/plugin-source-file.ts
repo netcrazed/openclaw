@@ -39,8 +39,10 @@ type CopyPluginSourceRootFileSync = (options: {
   [Symbol.dispose](): void;
 };
 
-function getCopyRootFileSync(): CopyPluginSourceRootFileSync {
-  return fsSafeAdvanced.copyRootFileSync;
+function getCopyRootFileSync(): CopyPluginSourceRootFileSync | undefined {
+  return typeof fsSafeAdvanced.copyRootFileSync === "function"
+    ? fsSafeAdvanced.copyRootFileSync
+    : undefined;
 }
 
 function pluginSourceExpectedIdentity(stat: fs.BigIntStats) {
@@ -160,10 +162,24 @@ export function copyPluginSourceFile(
       const mode = options.preserveSourceMode
         ? Number(admitted.mode & 0o777n)
         : 0o600 | Number(admitted.mode & 0o100n);
+      const copyFile = options.copyFile ?? getCopyRootFileSync();
+      const copyWithDescriptorGuard = () =>
+        copyPluginSourceFileDescriptorGuardedSync({
+          fd,
+          admitted,
+          target,
+          mode,
+          hashCopiedContent: options.hashCopiedContent,
+          hashDescriptor: hashPluginSourceDescriptor,
+          formatIdentity: pluginSourceStatIdentity,
+        });
+      if (!copyFile) {
+        return copyWithDescriptorGuard();
+      }
       try {
         // Keep our pin alive; fs-safe binds its own admitted open to this exact inode and retains
         // destination parent/leaf identity through chmod, hashing, and failure cleanup.
-        using copied = (options.copyFile ?? getCopyRootFileSync())({
+        using copied = copyFile({
           source: { rootPath: boundary, absolutePath: source },
           destination: { rootPath: path.dirname(target), absolutePath: target },
           expectedSourceIdentity: pluginSourceExpectedIdentity(admitted),
@@ -181,15 +197,7 @@ export function copyPluginSourceFile(
           : undefined;
       } catch (error) {
         if (canUseDescriptorGuardedCopyFallback(error)) {
-          return copyPluginSourceFileDescriptorGuardedSync({
-            fd,
-            admitted,
-            target,
-            mode,
-            hashCopiedContent: options.hashCopiedContent,
-            hashDescriptor: hashPluginSourceDescriptor,
-            formatIdentity: pluginSourceStatIdentity,
-          });
+          return copyWithDescriptorGuard();
         }
         throw error;
       }
