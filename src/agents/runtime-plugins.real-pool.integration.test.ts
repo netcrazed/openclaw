@@ -119,9 +119,11 @@ describe("model-catalog: real incremental registry reuse", () => {
     });
 
     // Step 1: load A+B only. Real load must run once each for A and B.
+    const configAB = baseConfig([pluginA.id, pluginB.id], [pluginA.file, pluginB.file]);
     const registryAB = loadAgentRuntimePluginRegistryHandle({
-      config: baseConfig([pluginA.id, pluginB.id], [pluginA.file, pluginB.file]),
+      config: configAB,
       basePluginIds: [pluginA.id, pluginB.id],
+      metadataSnapshot: loadPluginMetadataSnapshot({ config: configAB }),
       purpose: "model-catalog",
     });
     registries.push(registryAB);
@@ -133,12 +135,14 @@ describe("model-catalog: real incremental registry reuse", () => {
     // Step 2: request A+B+C (a superset), passing the A+B registry as `reusableRegistry`.
     // This must thread `previousRegistry` through so the real loader retains A and B by
     // signature match and only really loads C.
+    const configABC = baseConfig(
+      [pluginA.id, pluginB.id, pluginC.id],
+      [pluginA.file, pluginB.file, pluginC.file],
+    );
     const registryABC = loadAgentRuntimePluginRegistryHandle({
-      config: baseConfig(
-        [pluginA.id, pluginB.id, pluginC.id],
-        [pluginA.file, pluginB.file, pluginC.file],
-      ),
+      config: configABC,
       basePluginIds: [pluginA.id, pluginB.id, pluginC.id],
+      metadataSnapshot: loadPluginMetadataSnapshot({ config: configABC }),
       reusableRegistry: registryAB,
       purpose: "model-catalog",
     });
