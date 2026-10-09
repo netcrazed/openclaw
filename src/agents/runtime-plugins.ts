@@ -72,9 +72,10 @@ type AgentRuntimePluginRegistryParams = {
   purpose?: RuntimePluginLoadPurpose;
 };
 
-function resolveAgentRuntimePluginRegistryLoad(
-  params: AgentRuntimePluginRegistryParams,
-): PluginLoadOptions {
+function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistryParams): {
+  loadOptions: PluginLoadOptions;
+  metadataSnapshot?: PluginMetadataSnapshot;
+} {
   const loadOptions: PluginLoadOptions = {
     config: params.config,
     activationSourceConfig: params.config && projectConfigOntoRuntimeSourceSnapshot(params.config),
@@ -88,7 +89,7 @@ function resolveAgentRuntimePluginRegistryLoad(
       : undefined,
   };
   if (params.config?.plugins?.enabled === false) {
-    return { ...loadOptions, onlyPluginIds: [] };
+    return { loadOptions: { ...loadOptions, onlyPluginIds: [] } };
   }
   const metadataSnapshot =
     params.metadataSnapshot ??
@@ -150,24 +151,27 @@ function resolveAgentRuntimePluginRegistryLoad(
       ? params.reusableRegistry
       : undefined;
   return {
-    ...loadOptions,
-    config: plan.config,
-    activationSourceConfig,
-    workspaceDir,
-    discovery: metadataSnapshot.discovery,
-    installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
-    manifestRegistry: metadataSnapshot.manifestRegistry,
-    preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts,
-    onlyPluginIds: startupPluginIds === undefined ? undefined : plan.pluginIds,
-    channelPluginLoadIntent: startupPluginIds === undefined ? undefined : "full",
-    borrowRegistry: params.borrowRegistry,
-    ...(previousRegistryForIncrementalReuse
-      ? { previousRegistry: previousRegistryForIncrementalReuse }
-      : {}),
-    // For model-catalog worker handoff, enable ownership transfer when reusing previous registry
-    ...(params.purpose === "model-catalog" && previousRegistryForIncrementalReuse
-      ? { transferInstanceOwnership: true }
-      : {}),
+    loadOptions: {
+      ...loadOptions,
+      config: plan.config,
+      activationSourceConfig,
+      workspaceDir,
+      discovery: metadataSnapshot.discovery,
+      installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
+      manifestRegistry: metadataSnapshot.manifestRegistry,
+      preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts,
+      onlyPluginIds: startupPluginIds === undefined ? undefined : plan.pluginIds,
+      channelPluginLoadIntent: startupPluginIds === undefined ? undefined : "full",
+      borrowRegistry: params.borrowRegistry,
+      ...(previousRegistryForIncrementalReuse
+        ? { previousRegistry: previousRegistryForIncrementalReuse }
+        : {}),
+      // For model-catalog worker handoff, enable ownership transfer when reusing previous registry
+      ...(params.purpose === "model-catalog" && previousRegistryForIncrementalReuse
+        ? { transferInstanceOwnership: true }
+        : {}),
+    },
+    metadataSnapshot,
   };
 }
 
@@ -277,15 +281,15 @@ export type AcquiredAgentRuntimePluginRegistry =
 export async function acquireAgentRuntimePluginRegistry(
   params: AgentRuntimePluginRegistryParams,
 ): Promise<AcquiredAgentRuntimePluginRegistry> {
-  const loadOptions = resolveAgentRuntimePluginRegistryLoad(params);
+  const { loadOptions, metadataSnapshot } = resolveAgentRuntimePluginRegistryLoad(params);
   const reusable = reusableAgentRuntimeRegistry(params, loadOptions);
   if (reusable) {
     return { registry: bindAdmittingGateway(reusable), primaryRegistry: reusable };
   }
   const acquire = () => acquirePluginRegistryForInspection(loadOptions);
   const channelSource = captureRuntimeChannelSource(getActivePluginRegistry());
-  const acquired = await (params.metadataSnapshot
-    ? withPluginMetadataSnapshotScope(params.metadataSnapshot, acquire)
+  const acquired = await (metadataSnapshot
+    ? withPluginMetadataSnapshotScope(metadataSnapshot, acquire)
     : acquire());
   let releaseWork = () => {};
   try {
@@ -339,7 +343,7 @@ export function loadAgentRuntimePluginRegistryHandle(
   params: AgentRuntimePluginRegistryParams,
   onPrimaryRegistry?: (registry: PluginRegistry) => void,
 ): PluginRegistry {
-  const loadOptions = resolveAgentRuntimePluginRegistryLoad(params);
+  const { loadOptions, metadataSnapshot } = resolveAgentRuntimePluginRegistryLoad(params);
   const reusable = reusableAgentRuntimeRegistry(params, loadOptions);
   if (reusable) {
     onPrimaryRegistry?.(reusable);
@@ -350,8 +354,8 @@ export function loadAgentRuntimePluginRegistryHandle(
   // Prepared metadata outlives a transient caller's install or reload lease.
   const load = () => loadPluginRegistryHandle(loadOptions);
   const channelSource = captureRuntimeChannelSource(getActivePluginRegistry());
-  const pluginRegistry = params.metadataSnapshot
-    ? withPluginMetadataSnapshotScope(params.metadataSnapshot, load)
+  const pluginRegistry = metadataSnapshot
+    ? withPluginMetadataSnapshotScope(metadataSnapshot, load)
     : load();
   // Media providers remain owned by this source when full-only donors require a copy.
   onPrimaryRegistry?.(pluginRegistry);
