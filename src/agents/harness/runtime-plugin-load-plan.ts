@@ -46,10 +46,6 @@ function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, plu
   return allow.length > 0 && !allow.includes(pluginId);
 }
 
-function explicitlyDisablesPlugin(config: OpenClawConfig | undefined, pluginId: string) {
-  return config?.plugins?.entries?.[pluginId]?.enabled === false;
-}
-
 function resolveSelectedMemoryPluginIds(params: {
   config: OpenClawConfig | undefined;
   metadataSnapshot: PluginMetadataSnapshot;
@@ -390,9 +386,7 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
     : undefined;
   const contextEnginePluginIds = contextEnginePluginId ? [contextEnginePluginId] : [];
   const basePluginIds = (params.basePluginIds ?? []).filter(
-    (pluginId) =>
-      !restrictiveAllowlistOmitsPlugin(params.config, pluginId) &&
-      !explicitlyDisablesPlugin(params.config, pluginId),
+    (pluginId) => !restrictiveAllowlistOmitsPlugin(params.config, pluginId),
   );
   const pluginIds = [...basePluginIds, ...memoryPluginIds, ...contextEnginePluginIds];
   const forceActivatedPluginIds = [
