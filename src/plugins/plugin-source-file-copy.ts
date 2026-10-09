@@ -107,13 +107,21 @@ export function copyPluginSourceFileDescriptorGuardedSync(params: {
   }
 }
 
+function readFsSafeErrorCode(error: unknown): string | undefined {
+  if (error instanceof FsSafeError) {
+    return error.code;
+  }
+  return error && typeof error === "object" && "code" in error
+    ? typeof error.code === "string"
+      ? error.code
+      : undefined
+    : undefined;
+}
+
 export function canUseDescriptorGuardedCopyFallback(error: unknown): boolean {
-  if (process.platform !== "win32" || !(error instanceof FsSafeError)) {
+  if (process.platform !== "win32") {
     return false;
   }
-  return (
-    error.code === "path-mismatch" ||
-    error.code === "helper-failed" ||
-    error.code === "unsupported-platform"
-  );
+  const code = readFsSafeErrorCode(error);
+  return code === "path-mismatch" || code === "helper-failed" || code === "unsupported-platform";
 }
