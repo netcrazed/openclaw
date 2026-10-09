@@ -11,6 +11,11 @@ import {
   readErrorCauses,
 } from "../infra/errors.js";
 import { isGitRuntimeStagingName } from "../infra/update-runtime-staging.js";
+import {
+  canUseDescriptorGuardedCopyFallback,
+  copyPluginSourceFileDescriptorGuardedSync,
+  hasKnownPluginFileIdentity,
+} from "./plugin-source-file-copy.js";
 
 // Git rollback trees retain links relative to their final location. Only explicit
 // dependency selection may own them; incidental plugin walks must leave them alone.
@@ -38,15 +43,13 @@ function getCopyRootFileSync(): CopyPluginSourceRootFileSync {
   return fsSafeAdvanced.copyRootFileSync;
 }
 
-function pluginSourceExpectedIdentity(
-  stat: fs.BigIntStats,
-): Pick<fs.BigIntStats, "dev" | "ino"> | undefined {
+function pluginSourceExpectedIdentity(stat: fs.BigIntStats) {
   // fs-safe intentionally rejects incomplete Windows identity receipts. In that case it still
   // admits and rechecks the source through its own root-open path; passing an unprovable outer
   // receipt would downgrade a portable guarded copy into a Windows-only load failure.
-  return process.platform === "win32" && (stat.dev === 0n || stat.ino === 0n)
+  return process.platform === "win32" && !hasKnownPluginFileIdentity(stat)
     ? undefined
-    : { dev: stat.dev, ino: stat.ino };
+    : ({ dev: stat.dev, ino: stat.ino } satisfies Pick<fs.BigIntStats, "dev" | "ino">);
 }
 
 export const pluginSourceStatIdentity = (
@@ -117,24 +120,40 @@ export function copyPluginSourceFile(
       const mode = options.preserveSourceMode
         ? Number(admitted.mode & 0o777n)
         : 0o600 | Number(admitted.mode & 0o100n);
-      // Keep our pin alive; fs-safe binds its own admitted open to this exact inode and retains
-      // destination parent/leaf identity through chmod, hashing, and failure cleanup.
-      using copied = (options.copyFile ?? getCopyRootFileSync())({
-        source: { rootPath: boundary, absolutePath: source },
-        destination: { rootPath: path.dirname(target), absolutePath: target },
-        expectedSourceIdentity: pluginSourceExpectedIdentity(admitted),
-        clone: "auto",
-        maxBytes: Number(admitted.size),
-        mode,
-        sourceHardlinks: "allow",
-      });
-      // The initial hash belongs to the copied descriptor; receipts still recheck its path.
-      return options.hashCopiedContent
-        ? {
-            ...hashPluginSourceDescriptor(copied.fd),
-            sourceIdentity: pluginSourceStatIdentity(admitted, copied.sourceIdentity),
-          }
-        : undefined;
+      try {
+        // Keep our pin alive; fs-safe binds its own admitted open to this exact inode and retains
+        // destination parent/leaf identity through chmod, hashing, and failure cleanup.
+        using copied = (options.copyFile ?? getCopyRootFileSync())({
+          source: { rootPath: boundary, absolutePath: source },
+          destination: { rootPath: path.dirname(target), absolutePath: target },
+          expectedSourceIdentity: pluginSourceExpectedIdentity(admitted),
+          clone: "auto",
+          maxBytes: Number(admitted.size),
+          mode,
+          sourceHardlinks: "allow",
+        });
+        // The initial hash belongs to the copied descriptor; receipts still recheck its path.
+        return options.hashCopiedContent
+          ? {
+              ...hashPluginSourceDescriptor(copied.fd),
+              sourceIdentity: pluginSourceStatIdentity(admitted, copied.sourceIdentity),
+            }
+          : undefined;
+      } catch (error) {
+        if (canUseDescriptorGuardedCopyFallback(error)) {
+          return copyPluginSourceFileDescriptorGuardedSync({
+            fd,
+            admitted,
+            sourceIdentity: pluginSourceStatIdentity(admitted, admitted),
+            target,
+            mode,
+            hashCopiedContent: options.hashCopiedContent,
+            hashDescriptor: hashPluginSourceDescriptor,
+            formatIdentity: pluginSourceStatIdentity,
+          });
+        }
+        throw error;
+      }
     } catch (error) {
       // fs-safe wraps native failures; retain the disk-full code and detail that
       // plugin-load diagnostics use to explain how to recover.
