@@ -1,3 +1,4 @@
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
@@ -34,6 +35,7 @@ import {
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
+import { pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { transferPluginInstanceOwner } from "./plugin-instance-scope.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
@@ -68,6 +70,11 @@ type PluginLoadInput = {
 };
 const registryInputs = new WeakMap<PluginRegistry, Map<string, PluginLoadInput>>();
 const registryTransferRollbacks = new WeakMap<PluginRegistry, Array<() => void>>();
+
+function normalizePluginSourceLookupKey(source: string): string {
+  const resolved = pluginCacheRealpathSync(source) ?? path.resolve(source);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
 
 /** Captured JSON inputs ignore object key order, but preserve array order and values. */
 function samePluginLoadInput(left: string | undefined, right: string | undefined): boolean {
@@ -329,9 +336,21 @@ export function loadOpenClawPluginsCore(
     const manifestBySource = new Map(
       manifestRegistry.plugins.map((record) => [record.source, record]),
     );
-    // Manifest selection owns duplicate precedence; runtime consumes only its winners.
+    const manifestBySourceKey = new Map(
+      manifestRegistry.plugins.map((record) => [
+        normalizePluginSourceLookupKey(record.source),
+        record,
+      ]),
+    );
+    const findManifestForCandidate = (source: string) =>
+      manifestBySource.get(source) ??
+      manifestBySourceKey.get(normalizePluginSourceLookupKey(source));
+    // Manifest selection owns duplicate precedence; runtime consumes only its winners. The
+    // manifest registry may have been built from a persisted or transferred inventory whose
+    // Windows realpath/case spelling differs from fresh discovery, so do not require exact
+    // source-string equality after manifest duplicate resolution has already chosen winners.
     const orderedCandidates = discovery.candidates.filter((candidate) =>
-      manifestBySource.has(candidate.source),
+      Boolean(findManifestForCandidate(candidate.source)),
     );
     const loaderCacheIdentity = Object.freeze({
       requestKey: context.cacheKey,
@@ -370,7 +389,7 @@ export function loadOpenClawPluginsCore(
     const inputs = new Map<string, PluginLoadInput>();
     const retained = new Map<string, PluginRegistry["plugins"][number]>();
     for (const candidate of orderedCandidates) {
-      const manifest = manifestBySource.get(candidate.source);
+      const manifest = findManifestForCandidate(candidate.source);
       if (
         !manifest ||
         inputs.has(manifest.id) ||
@@ -515,7 +534,7 @@ export function loadOpenClawPluginsCore(
       (typeof manifestRegistry.plugins)[number]
     >();
     for (const candidate of orderedCandidates) {
-      const record = manifestBySource.get(candidate.source);
+      const record = findManifestForCandidate(candidate.source);
       if (record && !selectedMiddlewareOwnerManifests.has(record.id)) {
         selectedMiddlewareOwnerManifests.set(record.id, record);
       }
@@ -555,7 +574,7 @@ export function loadOpenClawPluginsCore(
     };
     const pluginLoadStartMs = performance.now();
     for (const candidate of orderedCandidates) {
-      const manifestRecord = manifestBySource.get(candidate.source);
+      const manifestRecord = findManifestForCandidate(candidate.source);
       if (!manifestRecord) {
         continue;
       }
@@ -619,7 +638,7 @@ export function loadOpenClawPluginsCore(
         env: context.env,
         installOwnerByPluginId: new Map(
           orderedCandidates.flatMap((candidate) => {
-            const pluginId = manifestBySource.get(candidate.source)?.id;
+            const pluginId = findManifestForCandidate(candidate.source)?.id;
             const installOwner = resolvePluginCandidateInstallOwner(candidate);
             return pluginId && installOwner ? [[pluginId, installOwner] as const] : [];
           }),

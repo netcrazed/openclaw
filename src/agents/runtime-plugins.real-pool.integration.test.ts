@@ -11,12 +11,14 @@
 // (`projectPluginContributions` in loader-runtime-core.ts) is actually reached and actually skips
 // unchanged plugins -- not just that the id bookkeeping looks right.
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
@@ -53,6 +55,50 @@ describe("model-catalog: real incremental registry reuse", () => {
       await disposePluginRegistryInstances(registry);
     }
     resetPluginLoaderTestStateForTest();
+  });
+
+  it("loads plugin modules when snapshot and discovery source spellings differ", () => {
+    useNoBundledPlugins();
+    const counterFile = writePlugin({ id: "counter-dir-holder", body: "module.exports = {};" }).dir;
+    const counterPath = path.join(counterFile, "counter.log");
+    const plugin = writeCountingPlugin("real-pool-source-spelling", counterPath);
+    const aliasFile = path.join(plugin.dir, "source-spelling-alias.cjs");
+    try {
+      fs.symlinkSync(path.basename(plugin.file), aliasFile);
+    } catch {
+      return;
+    }
+    const config = {
+      plugins: {
+        allow: [plugin.id],
+        load: { paths: [aliasFile] },
+        slots: { memory: "none" as const },
+      },
+    };
+    const snapshot = loadPluginMetadataSnapshot({ config });
+    const aliasedRecord = snapshot.manifestRegistry.plugins.find(
+      (record) => record.id === plugin.id,
+    );
+    expect(aliasedRecord?.source).toBe(aliasFile);
+    const metadataSnapshot = {
+      ...snapshot,
+      manifestRegistry: {
+        ...snapshot.manifestRegistry,
+        plugins: snapshot.manifestRegistry.plugins.map((record) =>
+          record.id === plugin.id ? { ...record, source: fs.realpathSync(record.source) } : record,
+        ),
+      },
+    };
+
+    const registry = loadAgentRuntimePluginRegistryHandle({
+      config,
+      basePluginIds: [plugin.id],
+      metadataSnapshot,
+      purpose: "model-catalog",
+    });
+    registries.push(registry);
+
+    expect(loadCountsFromCounterFile(counterPath)).toEqual({ [plugin.id]: 1 });
   });
 
   it("does not re-run the real load for already-loaded plugins when a superset is requested", () => {
