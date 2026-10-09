@@ -23,7 +23,7 @@ const scratch = Buffer.allocUnsafe(64 * 1024);
 type CopyPluginSourceRootFileSync = (options: {
   source: { rootPath: string; absolutePath: string };
   destination: { rootPath: string; absolutePath: string };
-  expectedSourceIdentity: Pick<fs.BigIntStats, "dev" | "ino">;
+  expectedSourceIdentity?: Pick<fs.BigIntStats, "dev" | "ino">;
   clone?: "auto" | "always" | "never";
   maxBytes?: number;
   mode?: number;
@@ -36,6 +36,17 @@ type CopyPluginSourceRootFileSync = (options: {
 
 function getCopyRootFileSync(): CopyPluginSourceRootFileSync {
   return fsSafeAdvanced.copyRootFileSync;
+}
+
+function pluginSourceExpectedIdentity(
+  stat: fs.BigIntStats,
+): Pick<fs.BigIntStats, "dev" | "ino"> | undefined {
+  // fs-safe intentionally rejects incomplete Windows identity receipts. In that case it still
+  // admits and rechecks the source through its own root-open path; passing an unprovable outer
+  // receipt would downgrade a portable guarded copy into a Windows-only load failure.
+  return process.platform === "win32" && (stat.dev === 0n || stat.ino === 0n)
+    ? undefined
+    : { dev: stat.dev, ino: stat.ino };
 }
 
 export const pluginSourceStatIdentity = (
@@ -111,7 +122,7 @@ export function copyPluginSourceFile(
       using copied = (options.copyFile ?? getCopyRootFileSync())({
         source: { rootPath: boundary, absolutePath: source },
         destination: { rootPath: path.dirname(target), absolutePath: target },
-        expectedSourceIdentity: { dev: admitted.dev, ino: admitted.ino },
+        expectedSourceIdentity: pluginSourceExpectedIdentity(admitted),
         clone: "auto",
         maxBytes: Number(admitted.size),
         mode,
