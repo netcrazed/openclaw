@@ -415,6 +415,125 @@ describe("previousRegistry-retained plugin instance ownership transfer", () => {
     }
   });
 
+  it("dispatches retained provider catalog callbacks after successful handoff and revokes stale callbacks before I/O", async () => {
+    const fixture = createInspectionFixture({ providerCatalog: true });
+    const predecessorResources = new PreparedModelRuntimeBuildResources(
+      retainPreparedPluginRegistry,
+    );
+    const successorResources = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
+    const disabledResources = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
+    try {
+      const predecessorRegistry = await predecessorResources.load(
+        { config: fixture.config, basePluginIds: [fixture.plugin.id], purpose: "model-catalog" },
+        () => {},
+      );
+      const predecessorRecord = predecessorRegistry.plugins.find(
+        (record) => record.id === fixture.plugin.id,
+      );
+      const instance = getPluginInstance(predecessorRecord!);
+      expect(instance).toBeDefined();
+
+      const successorRegistry = await successorResources.load(
+        {
+          config: fixture.config,
+          basePluginIds: [fixture.plugin.id],
+          reusableRegistry: predecessorRegistry,
+          purpose: "model-catalog",
+        },
+        () => {},
+      );
+      expect(
+        getPluginInstance(
+          successorRegistry.plugins.find((record) => record.id === fixture.plugin.id)!,
+        ),
+      ).toBe(instance);
+
+      await predecessorResources[Symbol.asyncDispose]();
+
+      const successorProvider = successorRegistry.providers.find(
+        (entry) => entry.provider.id === `${fixture.plugin.id}-provider`,
+      )?.provider;
+      expect(successorProvider?.catalog?.run).toBeTypeOf("function");
+      await expect(successorProvider!.catalog!.run({} as never)).resolves.toMatchObject({
+        provider: { models: [{ id: "fixture-model-42" }] },
+      });
+      expect(fixture.connection(0).catalogRuns).toBe(1);
+
+      const staleRun = successorProvider!.catalog!.run;
+      const disabledRegistry = await disabledResources.load(
+        {
+          config: { plugins: { allow: [], load: { paths: [] }, slots: { memory: "none" } } },
+          basePluginIds: [fixture.plugin.id],
+          reusableRegistry: successorRegistry,
+          purpose: "model-catalog",
+        },
+        () => {},
+      );
+      expect(
+        disabledRegistry.providers.find(
+          (entry) => entry.provider.id === `${fixture.plugin.id}-provider`,
+        ),
+      ).toBeUndefined();
+
+      await successorResources[Symbol.asyncDispose]();
+      const runsBeforeStaleAttempt = fixture.connection(0).catalogRuns;
+      await expect(Promise.resolve().then(() => staleRun({} as never))).rejects.toThrow(
+        PluginInstanceUnavailableError,
+      );
+      expect(fixture.connection(0).catalogRuns).toBe(runsBeforeStaleAttempt);
+      expect(fixture.connection(0).instanceDisposals).toBe(1);
+    } finally {
+      await disabledResources[Symbol.asyncDispose]().catch(() => undefined);
+      await successorResources[Symbol.asyncDispose]().catch(() => undefined);
+      await predecessorResources[Symbol.asyncDispose]().catch(() => undefined);
+    }
+  });
+
+  it("failed worker handoff restores predecessor registered provider callbacks via real worker path", async () => {
+    const fixture = createInspectionFixture({ providerCatalog: true });
+    const predecessorResources = new PreparedModelRuntimeBuildResources(
+      retainPreparedPluginRegistry,
+    );
+    let successorResources: PreparedModelRuntimeBuildResources | undefined =
+      new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
+    try {
+      const predecessorRegistry = await predecessorResources.load(
+        { config: fixture.config, basePluginIds: [fixture.plugin.id], purpose: "model-catalog" },
+        () => {},
+      );
+      const predecessorProvider = predecessorRegistry.providers.find(
+        (entry) => entry.provider.id === `${fixture.plugin.id}-provider`,
+      )?.provider;
+      expect(predecessorProvider?.catalog?.run).toBeTypeOf("function");
+
+      const buildError = new Error("Simulated provider callback handoff failure");
+      await expect(
+        successorResources.load(
+          {
+            config: fixture.config,
+            basePluginIds: [fixture.plugin.id],
+            reusableRegistry: predecessorRegistry,
+            purpose: "model-catalog",
+          },
+          () => {
+            throw buildError;
+          },
+        ),
+      ).rejects.toThrow(buildError);
+      await successorResources[Symbol.asyncDispose]().catch(() => undefined);
+      successorResources = undefined;
+
+      await expect(predecessorProvider!.catalog!.run({} as never)).resolves.toMatchObject({
+        provider: { models: [{ id: "fixture-model-42" }] },
+      });
+      expect(fixture.connection(0).catalogRuns).toBe(1);
+      expect(fixture.connection(0).instanceDisposals).toBe(0);
+    } finally {
+      await successorResources?.[Symbol.asyncDispose]().catch(() => undefined);
+      await predecessorResources[Symbol.asyncDispose]().catch(() => undefined);
+    }
+  });
+
   it("failed worker handoff (generation build throws after transfer) restores predecessor custody via real worker path", async () => {
     const fixture = createInspectionFixture();
     const predecessorResources = new PreparedModelRuntimeBuildResources(

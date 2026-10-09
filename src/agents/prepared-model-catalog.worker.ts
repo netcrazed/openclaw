@@ -203,11 +203,11 @@ export async function prepareWorkerGeneration(
   pluginIds?: readonly string[],
 ): Promise<WorkerGeneration> {
   const { prepareConfiguredModelFacts } = await import("./prepared-model-runtime.facts.js");
-  // Rediscovery under agent workspaces or runtime activation overlays loses the owner's
-  // metadata generation. Its source/built artifact selection must survive reconstruction too.
-  const metadata =
-    previous?.pluginGeneration.pluginMetadataSnapshot ??
-    restorePluginMetadataSnapshot(value.pluginMetadataSnapshot);
+  // Fingerprint misses must rebuild against the current request's metadata/policy snapshot.
+  // The predecessor is only a retention candidate for registry reuse; carrying its metadata
+  // forward compares stale plugin facts against the current request and can force a generation
+  // mismatch immediately after a legitimate policy/inventory change.
+  const metadata = restorePluginMetadataSnapshot(value.pluginMetadataSnapshot);
   // The parent owns native harness observations; this worker owns provider catalog hooks.
   // An empty eligible set stays empty instead of reopening unscoped plugin discovery.
   const normalizedConfig = normalizePluginsConfig(value.input.config.plugins);

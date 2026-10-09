@@ -1448,6 +1448,7 @@ src/plugins/public-surface-loader.ts
 src/plugins/public-surface-runtime.ts
 src/plugins/record-groups.ts
 src/plugins/registry-empty.ts
+src/plugins/registry-inspection-resource-map.ts
 src/plugins/registry-inspection-resources.ts
 src/plugins/registry-lifecycle.ts
 src/plugins/registry-registration-resources.ts

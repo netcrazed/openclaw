@@ -13,6 +13,7 @@ type InspectionConnection = {
   disposals: number;
   cleanups: number;
   instanceDisposals: number;
+  catalogRuns: number;
 };
 let inspectionFixtureId = 0;
 
@@ -21,6 +22,7 @@ export function createInspectionFixture(options?: {
   pauseDisposal?: boolean;
   disposalFailure?: boolean;
   contextEngine?: boolean;
+  providerCatalog?: boolean;
   capturedDisposal?: "async-context" | "work-tracker" | "sibling-tracker";
   queuedAbortCleanup?: boolean;
   capturedInstanceDisposal?: boolean;
@@ -71,7 +73,7 @@ module.exports = {
   register(api) {
     const state = globalThis[${JSON.stringify(key)}];
     const database = new DatabaseSync(":memory:");
-    const connection = { database, disposals: 0, cleanups: 0, instanceDisposals: 0 };
+    const connection = { database, disposals: 0, cleanups: 0, instanceDisposals: 0, catalogRuns: 0 };
     state.connections.push(connection);
     const captureMode = ${JSON.stringify(options?.capturedDisposal)};
     const listener = () => {};
@@ -134,6 +136,20 @@ module.exports = {
       api.registerContextEngine(${JSON.stringify(id)}, () => {
         state.factoryCalls++;
         throw new Error("Discovery must not invoke the context engine factory");
+      });
+    }
+    if (${options?.providerCatalog === true}) {
+      api.registerProvider({
+        id: ${JSON.stringify(id)} + "-provider",
+        label: "Fixture provider",
+        auth: [],
+        catalog: {
+          async run() {
+            connection.catalogRuns++;
+            const row = database.prepare("SELECT 42 AS value").get();
+            return { provider: { models: [{ id: "fixture-model-" + row.value }] } };
+          },
+        },
       });
     }
     const mode = ${JSON.stringify(options?.registration)};
