@@ -104,7 +104,7 @@ describe("model-catalog: real incremental registry reuse", () => {
   it("does not re-run the real load for already-loaded plugins when a superset is requested", () => {
     useNoBundledPlugins();
     const counterFile = writePlugin({ id: "counter-dir-holder", body: "module.exports = {};" }).dir;
-    const counterPath = `${counterFile}/counter.log`;
+    const counterPath = path.join(counterFile, "counter.log");
 
     const pluginA = writeCountingPlugin("real-pool-a", counterPath);
     const pluginB = writeCountingPlugin("real-pool-b", counterPath);
