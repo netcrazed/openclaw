@@ -21,14 +21,19 @@ function sameKnownIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return hasKnownPluginFileIdentity(left) && left.dev === right.dev && left.ino === right.ino;
 }
 
-function assertPluginSourceStillAdmitted(params: {
-  fd: number;
-  admitted: fs.BigIntStats;
-  sourceIdentity: string;
-  formatIdentity: PluginSourceIdentityFormatter;
-}): void {
+function sameCurrentPluginSourceStat(left: fs.BigIntStats, right: fs.BigIntStats): boolean {
+  return (
+    sameCurrentPluginFileIdentity(left, right) &&
+    left.mode === right.mode &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+function assertPluginSourceStillAdmitted(params: { fd: number; admitted: fs.BigIntStats }): void {
   const current = fs.fstatSync(params.fd, { bigint: true });
-  if (params.formatIdentity(current, current) === params.sourceIdentity) {
+  if (sameCurrentPluginSourceStat(current, params.admitted)) {
     return;
   }
   throw new Error(
@@ -67,7 +72,6 @@ function removeOwnedPluginCopyTargetIfCurrent(target: string, identity: FileIden
 export function copyPluginSourceFileDescriptorGuardedSync(params: {
   fd: number;
   admitted: fs.BigIntStats;
-  sourceIdentity: string;
   target: string;
   mode: number;
   hashCopiedContent?: boolean;
@@ -81,7 +85,7 @@ export function copyPluginSourceFileDescriptorGuardedSync(params: {
     fsSafeAdvanced.copyFileDescriptorSync(params.fd, targetOwner.fd, {
       maxBytes: Number(params.admitted.size),
     });
-    assertPluginSourceStillAdmitted(params);
+    assertPluginSourceStillAdmitted({ fd: params.fd, admitted: params.admitted });
     assertOwnedPluginCopyTargetCurrent(targetOwner.fd, params.target, identity);
     fs.fchmodSync(targetOwner.fd, params.mode);
     assertOwnedPluginCopyTargetCurrent(targetOwner.fd, params.target, identity);

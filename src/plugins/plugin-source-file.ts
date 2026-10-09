@@ -58,11 +58,51 @@ export const pluginSourceStatIdentity = (
 ): string =>
   `${identity.dev}:${identity.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 
+function parsePluginSourceStatIdentity(identity: string) {
+  const [dev, ino, mode, size, mtimeNs, ctimeNs, ...extra] = identity.split(":");
+  if (
+    extra.length > 0 ||
+    dev === undefined ||
+    ino === undefined ||
+    mode === undefined ||
+    size === undefined ||
+    mtimeNs === undefined ||
+    ctimeNs === undefined
+  ) {
+    return undefined;
+  }
+  try {
+    return {
+      dev: BigInt(dev),
+      ino: BigInt(ino),
+      mode,
+      size,
+      mtimeNs,
+      ctimeNs,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export const pluginSourceIdentityChangedOnlyByCtime = (
   previous: string,
   current: string,
-): boolean =>
-  previous.slice(0, previous.lastIndexOf(":")) === current.slice(0, current.lastIndexOf(":"));
+): boolean => {
+  const left = parsePluginSourceStatIdentity(previous);
+  const right = parsePluginSourceStatIdentity(current);
+  if (left && right) {
+    return (
+      fsSafeAdvanced.sameFileIdentity(left, right) &&
+      left.mode === right.mode &&
+      left.size === right.size &&
+      left.mtimeNs === right.mtimeNs
+    );
+  }
+  return (
+    previous.slice(0, previous.lastIndexOf(":")) === current.slice(0, current.lastIndexOf(":"))
+  );
+};
 
 function withPluginSourceFile<T>(source: string, boundary: string, read: (fd: number) => T): T {
   const opened = openRootFileSync({
@@ -144,7 +184,6 @@ export function copyPluginSourceFile(
           return copyPluginSourceFileDescriptorGuardedSync({
             fd,
             admitted,
-            sourceIdentity: pluginSourceStatIdentity(admitted, admitted),
             target,
             mode,
             hashCopiedContent: options.hashCopiedContent,
