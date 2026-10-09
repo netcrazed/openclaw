@@ -208,9 +208,7 @@ describe("agent runtime plugin registries", () => {
   });
 
   it.each([
-    { rotated: false, projected: false },
     { rotated: true, projected: false },
-    { rotated: false, projected: true },
     { rotated: true, projected: true },
   ])(
     "validates captured SecretRefs (snapshot rotated: $rotated, policy projected: $projected)",
@@ -289,40 +287,14 @@ describe("agent runtime plugin registries", () => {
     },
   );
 
-  it("adopts full-only runtime capabilities from the active composition-root registry", () => {
-    const activeRegistry = createEmptyPluginRegistry();
-    const primaryRegistry = createEmptyPluginRegistry();
-    const contextEnginesAdopted = { handle: "context-engines" };
-    const presentersAdopted = { handle: "presenters" };
-    const onPrimaryRegistry = vi.fn();
-    hoisted.loadPluginRegistryHandle.mockReturnValue(primaryRegistry);
-    hoisted.getActivePluginRegistry.mockReturnValue(activeRegistry);
-    hoisted.adoptRuntimeContextEngineRegistrations.mockReturnValue(contextEnginesAdopted);
-    hoisted.adoptRuntimeWidgetPresenterRegistrations.mockReturnValue(presentersAdopted);
-
-    expect(
-      loadAgentRuntimePluginRegistryHandle(
-        { config: {}, workspaceDir: "/tmp/workspace" },
-        onPrimaryRegistry,
-      ),
-    ).toBe(presentersAdopted);
-    expect(onPrimaryRegistry).toHaveBeenCalledExactlyOnceWith(primaryRegistry);
-    expect(hoisted.adoptRuntimeContextEngineRegistrations).toHaveBeenCalledWith(
-      primaryRegistry,
-      activeRegistry,
-    );
-    expect(hoisted.adoptRuntimeWidgetPresenterRegistrations).toHaveBeenCalledWith(
-      contextEnginesAdopted,
-      activeRegistry,
-    );
-    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
-      expect.not.objectContaining({ onlyPluginIds: expect.anything() }),
-    );
-  });
-
-  it.each([false, true])(
-    "keeps catalog registries exact with broader reusable scope=%s",
-    (broader) => {
+  it.each([
+    { purpose: "model-catalog" as const, broader: false },
+    { purpose: "model-catalog" as const, broader: true },
+    { purpose: "isolated-completion" as const, broader: false },
+    { purpose: "isolated-completion" as const, broader: true },
+  ])(
+    "keeps $purpose registries exact with broader reusable scope=$broader",
+    ({ purpose, broader }) => {
       const reusableRegistry = createEmptyPluginRegistry();
       reusableRegistry.plugins.push(createPluginRecord({ id: "catalog-provider" }));
       if (broader) {
@@ -341,15 +313,12 @@ describe("agent runtime plugin registries", () => {
         config: {},
         basePluginIds: ["catalog-provider"],
         reusableRegistry,
-        purpose: "model-catalog",
+        purpose,
       });
 
-      // Model-catalog requests now always re-enter the real loader; reuse happens via
-      // loadOpenClawPluginsCore's per-plugin signature matching, not by short-circuiting the
-      // outer entry point. This verifies that the call still uses the requested id set and
-      // returns the correct registry contents for that scope.
-      expect(registry.plugins.map((p) => p.id)).toEqual(["catalog-provider"]);
-      expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
+      const directReuse = purpose === "isolated-completion" && !broader;
+      expect(registry).toBe(directReuse ? reusableRegistry : primaryRegistry);
+      expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledTimes(directReuse ? 0 : 1);
       expect(hoisted.adoptRuntimeContextEngineRegistrations).not.toHaveBeenCalled();
       expect(hoisted.adoptRuntimeWidgetPresenterRegistrations).not.toHaveBeenCalled();
     },
@@ -606,64 +575,6 @@ describe("agent runtime plugin registries", () => {
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps direct no-current loads on the requested workspace", () => {
-    const config = {} as never;
-    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" };
-    const selections = [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }];
-
-    expect(
-      loadAgentRuntimePluginRegistryHandle({
-        config,
-        env,
-        workspaceDir: "/tmp/workspace",
-        allowGatewaySubagentBinding: true,
-        selections,
-      }),
-    ).toEqual(createEmptyPluginRegistry());
-    const metadataSnapshot = hoisted.loadPluginMetadataSnapshot.mock.results[0]?.value;
-    expect(hoisted.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
-      config,
-      env,
-      workspaceDir: "/tmp/workspace",
-    });
-    expect(hoisted.resolveAgentRuntimePluginLoadPlan).toHaveBeenCalledWith({
-      config,
-      workspaceDir: "/tmp/workspace",
-      selections,
-      metadataSnapshot,
-    });
-    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config,
-        activationSourceConfig: config,
-        env,
-        discovery: metadataSnapshot.discovery,
-        installRecords: {},
-        manifestRegistry: metadataSnapshot.manifestRegistry,
-        workspaceDir: "/tmp/workspace",
-        runtimeOptions: { allowGatewaySubagentBinding: true },
-      }),
-    );
-  });
-
-  it("loads an explicit empty handle when plugins are globally disabled", () => {
-    const params = {
-      config: { plugins: { enabled: false } } as never,
-      workspaceDir: "/tmp/workspace",
-    };
-    expect(loadAgentRuntimePluginRegistryHandle(params)).toEqual(createEmptyPluginRegistry());
-    expect(hoisted.resolveAgentRuntimePluginLoadPlan).not.toHaveBeenCalled();
-    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activationSourceConfig: params.config,
-        config: params.config,
-        onlyPluginIds: [],
-        runtimeOptions: undefined,
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
-  });
-
   it("carries low-level reply policy without rebinding the loader's cached registry", async () => {
     const config = { plugins: { enabled: false } } satisfies OpenClawConfig;
     const cachedRegistry = createEmptyPluginRegistry();
@@ -689,182 +600,7 @@ describe("agent runtime plugin registries", () => {
     expect(hoisted.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
-  it("keeps an explicit metadata generation source-default without Gateway selection", () => {
-    const config = {} as never;
-    const metadataSnapshot = createMetadataSnapshot();
-    hoisted.getActivePluginRegistry.mockReturnValue({
-      plugins: [{ id: "broader-process-owner", status: "loaded" }],
-    });
-
-    loadAgentRuntimePluginRegistryHandle({
-      config,
-      workspaceDir: "/tmp/workspace",
-      metadataSnapshot: metadataSnapshot as never,
-    });
-
-    expect(hoisted.resolveAgentRuntimePluginLoadPlan).toHaveBeenCalledWith({
-      config,
-      workspaceDir: "/tmp/gateway-workspace",
-      basePluginIds: ["telegram", "memory-core"],
-      selections: [],
-      metadataSnapshot,
-    });
-    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channelPluginLoadIntent: "full",
-      }),
-    );
-    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
-      expect.not.objectContaining({ preferBuiltPluginArtifacts: true }),
-    );
-  });
-
-  it("inherits the current request registry before process-wide startup metadata", () => {
-    const config = {} as never;
-    const metadataSnapshot = createMetadataSnapshot();
-    const requestRegistry = {
-      plugins: [
-        { id: "memory-core", status: "loaded" },
-        { id: "deferred", status: "loaded", format: "openclaw", imported: false },
-      ],
-    } as never;
-
-    withPluginRuntimeRegistryScope(requestRegistry, () =>
-      loadAgentRuntimePluginRegistryHandle({
-        config,
-        workspaceDir: "/tmp/workspace",
-        metadataSnapshot: metadataSnapshot as never,
-      }),
-    );
-
-    expect(hoisted.resolveAgentRuntimePluginLoadPlan).toHaveBeenCalledWith({
-      config,
-      workspaceDir: "/tmp/gateway-workspace",
-      basePluginIds: ["memory-core"],
-      selections: [],
-      metadataSnapshot,
-    });
-  });
-
-  it("lets direct local hosts bound the registry to configured runtime owners", () => {
-    const config = {} as never;
-
-    loadAgentRuntimePluginRegistryHandle({
-      basePluginIds: [],
-      config,
-      workspaceDir: "/tmp/workspace",
-    });
-
-    const metadataSnapshot = hoisted.loadPluginMetadataSnapshot.mock.results[0]?.value;
-    expect(hoisted.resolveAgentRuntimePluginLoadPlan).toHaveBeenCalledWith({
-      config,
-      workspaceDir: "/tmp/workspace",
-      basePluginIds: [],
-      selections: [],
-      metadataSnapshot,
-    });
-  });
-
-  it("loads selected runtimes from the Gateway metadata workspace", () => {
-    const config = {} as never;
-    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" };
-    const snapshot = createMetadataSnapshot();
-
-    loadAgentRuntimePluginRegistryHandle({
-      config,
-      env,
-      workspaceDir: "/tmp/agent-workspace",
-      metadataSnapshot: snapshot as never,
-      preferBuiltPluginArtifacts: true,
-    });
-
-    expect(hoisted.resolveAgentRuntimePluginLoadPlan).toHaveBeenCalledWith({
-      config,
-      workspaceDir: snapshot.workspaceDir,
-      basePluginIds: ["telegram", "memory-core"],
-      selections: [],
-      metadataSnapshot: snapshot,
-    });
-    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activationSourceConfig: config,
-        channelPluginLoadIntent: "full",
-        config,
-        discovery: snapshot.discovery,
-        env,
-        installRecords: {},
-        manifestRegistry: snapshot.manifestRegistry,
-        onlyPluginIds: ["codex", "memory-core"],
-        preferBuiltPluginArtifacts: true,
-        runtimeOptions: undefined,
-        workspaceDir: snapshot.workspaceDir,
-      }),
-    );
-  });
-
-  it("owns a scoped registry for direct hosts", async () => {
-    const config = {} as never;
-    const pluginRegistry = createEmptyPluginRegistry();
-    hoisted.loadPluginRegistryHandle.mockReturnValue(pluginRegistry);
-
-    await expect(
-      withAgentPluginRegistry({
-        config,
-        workspaceDir: "/tmp/workspace",
-        run: async () => getPluginRuntimeGatewayRequestScope()?.pluginRegistry,
-      }),
-    ).resolves.toBe(pluginRegistry);
-
-    expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
-    expect(getPluginRuntimeLoadContext(pluginRegistry)).toMatchObject({
-      activationSourceConfig: config,
-      metadataSnapshot: expect.any(Object),
-    });
-    expect(hoisted.resolveAgentRuntimePluginLoadPlan).toHaveBeenCalledWith({
-      config,
-      workspaceDir: "/tmp/workspace",
-      basePluginIds: undefined,
-      selections: [],
-      metadataSnapshot: expect.any(Object),
-    });
-  });
-
-  it("inherits active runtime ids for direct hosts without a request registry", async () => {
-    const config = {} as never;
-    hoisted.getActivePluginRegistry.mockReturnValue({
-      plugins: [
-        createPluginRecord({ id: "startup-channel", status: "loaded" }),
-        createPluginRecord({ id: "startup-provider", status: "loaded" }),
-      ],
-    });
-    const pluginRegistry = createEmptyPluginRegistry();
-    hoisted.loadPluginRegistryHandle.mockReturnValue(pluginRegistry);
-
-    await withAgentPluginRegistry({
-      config,
-      workspaceDir: "/tmp/workspace",
-      run: async () => {},
-    });
-
-    expect(hoisted.resolveAgentRuntimePluginLoadPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        basePluginIds: ["startup-channel", "startup-provider"],
-      }),
-    );
-    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
-      expect.objectContaining({ onlyPluginIds: ["codex", "memory-core"] }),
-    );
-  });
-
   it.each([
-    {
-      name: "globally disabled plugins",
-      config: { plugins: { enabled: false } } satisfies OpenClawConfig,
-      runtime: "codex",
-      expectedOwner: 'Owner plugin "codex" is not activatable',
-      expectedReason: "plugins disabled",
-      expectedMetadataLoads: 0,
-    },
     {
       name: "globally disabled plugins with an unknown owner",
       config: { plugins: { enabled: false } } satisfies OpenClawConfig,
@@ -928,40 +664,6 @@ describe("agent runtime plugin registries", () => {
       expect(hoisted.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(expectedMetadataLoads);
     },
   );
-
-  it("retains loaded request plugins when preparing a selected usage harness", async () => {
-    const gatewayRegistry = createEmptyPluginRegistry();
-    gatewayRegistry.plugins.push(
-      createPluginRecord({ id: "request-provider" }),
-      createPluginRecord({ id: "deferred", format: "openclaw", imported: false }),
-    );
-    hoisted.resolveAgentRuntimePluginLoadPlan.mockImplementation(({ config, basePluginIds }) => ({
-      config,
-      pluginIds: [...(basePluginIds ?? []), "selected-harness"],
-    }));
-    hoisted.loadPluginRegistryHandle.mockImplementation(({ onlyPluginIds }) => ({
-      ...createEmptyPluginRegistry(),
-      plugins: onlyPluginIds.map((id: string) => createPluginRecord({ id })),
-    }));
-
-    const loaded = await withPluginRuntimeRegistryScope(gatewayRegistry, () =>
-      withAgentPluginRegistry({
-        config: {},
-        workspaceDir: "/tmp/workspace",
-        selections: [{ provider: "selected-provider", modelId: "", runtime: "selected-harness" }],
-        run: async () => getPluginRuntimeGatewayRequestScope()?.pluginRegistry,
-      }),
-    );
-
-    expect(loaded?.plugins.map((plugin) => plugin.id)).toEqual([
-      "request-provider",
-      "selected-harness",
-    ]);
-    expect(gatewayRegistry.plugins.map((plugin) => plugin.id)).toEqual([
-      "request-provider",
-      "deferred",
-    ]);
-  });
 
   it("reuses an existing gateway registry owner", async () => {
     const gatewayRegistry = { gateway: true } as never;

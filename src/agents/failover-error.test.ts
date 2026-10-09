@@ -3,6 +3,7 @@ import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-erro
 import { diagnosticErrorFailureKind } from "../infra/diagnostic-error-metadata.js";
 import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import {
   buildFailoverRemediationHint,
   buildProviderReauthCommand,
@@ -38,6 +39,18 @@ function expectReason(error: unknown, reason: FailoverReason | null) {
 }
 
 describe("failover-error", () => {
+  it("preserves an Ollama model-retirement error instead of coercing it to a timeout", () => {
+    const body = JSON.stringify({
+      error: "glm-5.1 was retired at 2026-09-25 00:00:00 -0700 PDT (ref: synthetic-retirement)",
+    });
+    const error = Object.assign(new Error(`410 ${body}`), { status: 410, body });
+    expect(coerceToFailoverError(error, { provider: "ollama" })).toMatchObject({
+      reason: "model_not_found",
+      status: 410,
+      rawError: error.message,
+    });
+  });
+
   it("does not promote a direct preflight into a provider failure", () => {
     const message = "handoff refused: 529 OVERLOADED";
     const cause = { status: 529, code: "OVERLOADED", message: "overloaded" };
@@ -541,13 +554,27 @@ describe("isNonProviderRuntimeCoordinationError", () => {
     ).toBe(true);
   });
 
-  it("returns true for direct and nested runner admission failures", () => {
-    const coordination = Object.assign(new Error("The device runner is offline"), {
-      name: "WorkerRunnerUnavailableError",
-    });
+  it.each([
+    "WorkerRunnerUnavailableError",
+    "NodeRunnerUpdateRequiredError",
+    "CodexNodeExecServerDisconnectedError",
+  ])("returns true for direct and nested %s coordination failures", (name) => {
+    const coordination = Object.assign(new Error("private coordination diagnostic"), { name });
     for (const error of [coordination, new Error("worker turn failed", { cause: coordination })]) {
       expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
       expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+    }
+  });
+
+  it("does not read a SQLite worker code as a provider overload", () => {
+    const error = new SqliteWorkerError("SQLite worker store capacity reached", "overloaded");
+    for (const candidate of [error, new Error("lane task error", { cause: error })]) {
+      expect(resolveModelFallbackError(candidate)).toEqual({
+        kind: "coordination",
+        error: candidate,
+      });
+      expect(coerceToFailoverError(candidate)).toBeNull();
+      expect(describeFailoverError(candidate).reason).toBeUndefined();
     }
   });
 

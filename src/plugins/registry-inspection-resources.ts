@@ -4,6 +4,10 @@ import {
   collectRegistryInvocationInstances,
   PluginInvocationScope,
 } from "./plugin-invocation-scope.js";
+import {
+  bindPluginRegistryInspectionTransferTarget,
+  type PluginRegistryInspectionTransferTarget,
+} from "./registry-inspection-resource-map.js";
 import { markPluginRegistriesRetired } from "./registry-lifecycle.js";
 import {
   PluginRegistrationResourceSource,
@@ -11,6 +15,10 @@ import {
   type RegistrationCleanup,
 } from "./registry-registration-resources.js";
 import type { PluginRegistry } from "./registry-types.js";
+import {
+  hasRetainedPluginRuntimeCloseError,
+  PluginRuntimeCloseCompletedError,
+} from "./runtime-close-error.js";
 
 // Registrars and loaders can come from different source/built module copies.
 const inspections = resolveGlobalSingleton(
@@ -24,12 +32,15 @@ export function getPluginRegistryInspectionResources(registry: PluginRegistry) {
 
 function throwDisposalFailures(failures: Error[]): void {
   if (failures.length > 0) {
-    throw new AggregateError(failures, "Plugin inspection resources could not all be disposed");
+    const Failure = failures.some(hasRetainedPluginRuntimeCloseError)
+      ? AggregateError
+      : PluginRuntimeCloseCompletedError;
+    throw new Failure(failures, "Plugin inspection resources could not all be disposed");
   }
 }
 
 /** Owns only an explicitly acquired, uncached inspection's registration resources. */
-export class PluginRegistryInspectionResources {
+export class PluginRegistryInspectionResources implements PluginRegistryInspectionTransferTarget {
   #registry?: PluginRegistry;
   readonly #rollbackInstances = new Set<object>();
   readonly #retainedInstances = new Set<object>();
@@ -59,6 +70,7 @@ export class PluginRegistryInspectionResources {
     this.#registry ??= registry;
     this.#registries.add(registry);
     inspections.set(registry, this);
+    bindPluginRegistryInspectionTransferTarget(registry, this);
   }
 
   register(pluginId: string, disposer: RegistrationDisposer): void {

@@ -1,3 +1,4 @@
+import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import type {
   ChatAttachment,
   ChatGoalDraftMode,
@@ -6,26 +7,21 @@ import type {
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type {
+  DurableComposerDraft,
   DurableComposerDraftScope,
-  DurableDraftModelSelection,
+  writeDurableComposerDraft,
 } from "../../lib/chat/composer-draft-store.runtime.ts";
 import { readChatSelectionAnnotation } from "../../lib/chat/selection-annotation.ts";
 import { generateAttachmentId, getChatAttachmentBlob } from "./attachment-payload-store.ts";
 
-export type DurableChatComposerSnapshot = {
-  scope: DurableComposerDraftScope;
-  expectedRevision: number;
-  expectedWriteId?: string;
-  expectedWriteIds?: readonly string[];
-  revision: number;
-  text: string;
-  mentions?: readonly HumanMention[];
-  goalMode?: ChatGoalDraftMode;
-  replyTarget?: ChatReplyTarget;
-  modelSelection?: DurableDraftModelSelection;
-  storedAttachments: DurableComposerDraftAttachment[] | null;
-  writeId: string;
-};
+export type DurableChatComposerSnapshot = Omit<
+  DurableComposerDraft,
+  "attachments" | "questionDrafts"
+> &
+  Parameters<typeof writeDurableComposerDraft>[2] & {
+    scope: DurableComposerDraftScope;
+    storedAttachments: DurableComposerDraftAttachment[] | null;
+  };
 
 type RestoreBaseline = {
   scope: DurableComposerDraftScope;
@@ -33,22 +29,16 @@ type RestoreBaseline = {
   signature: string;
 };
 
-type RestoredDraft = {
-  revision: number;
-  text: string;
-  mentions?: readonly HumanMention[];
-  goalMode?: ChatGoalDraftMode;
-  replyTarget?: ChatReplyTarget;
+type RestoredDraft = Pick<
+  DurableComposerDraft,
+  "revision" | "text" | "mentions" | "goalMode" | "replyTarget"
+> & {
   attachments: ChatAttachment[];
 };
 
 const reportedStorageOwners = new Set<string>();
 
 const durableComposerStore = import("../../lib/chat/composer-draft-store.runtime.ts");
-
-function durableComposerOwnerKey(scope: DurableComposerDraftScope): string {
-  return JSON.stringify([scope.gatewayOwner, scope.recoveryScope]);
-}
 
 export function durableComposerScopeIdentity(scope: DurableComposerDraftScope): string {
   return JSON.stringify([scope.gatewayOwner, scope.recoveryScope, scope.scopeKey]);
@@ -58,7 +48,7 @@ export function reportDurableComposerStorageError(
   scope: DurableComposerDraftScope,
   onStorageError: () => void,
 ) {
-  const owner = durableComposerOwnerKey(scope);
+  const owner = JSON.stringify([scope.gatewayOwner, scope.recoveryScope]);
   if (reportedStorageOwners.has(owner)) {
     return;
   }
@@ -97,24 +87,6 @@ export function chatAttachmentDraftSignature(
       attachment.selectionAnnotation ?? null,
     ]),
   ]);
-}
-
-export function readBlobAsDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("error", () => reject(reader.error ?? new Error("Blob read failed")), {
-      once: true,
-    });
-    reader.addEventListener(
-      "load",
-      () =>
-        typeof reader.result === "string"
-          ? resolve(reader.result)
-          : reject(new Error("Blob read returned no data")),
-      { once: true },
-    );
-    reader.readAsDataURL(blob);
-  });
 }
 
 export function captureDurableChatAttachments(
