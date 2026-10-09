@@ -579,12 +579,9 @@ async function runCatalogRequest(
     clearRegistryTransferRollbacks(registry);
     if (acquiredGeneration) {
       const releasePrevious = prepared.release;
-      prepared.pluginGeneration = acquiredGeneration.pluginGeneration;
-      prepared.pluginIds = acquiredGeneration.pluginIds;
-      prepared.staticProviderIds = acquiredGeneration.staticProviderIds;
-      prepared.release = acquiredGeneration.release;
-      // Also clear rollbacks on the acquired generation's registry
-      clearRegistryTransferRollbacks(acquiredGeneration.pluginGeneration.pluginRegistry);
+      Object.assign(prepared, acquiredGeneration);
+      // Also clear rollbacks on the acquired generation's registry.
+      clearRegistryTransferRollbacks(prepared.pluginGeneration.pluginRegistry);
       acquiredGeneration = undefined;
       await releasePrevious();
     }
@@ -627,6 +624,10 @@ async function runCatalogRequest(
   }
 }
 
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
 function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
   return (
     isRecord(value) &&
@@ -635,15 +636,10 @@ function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
     typeof value.clawInstallSchemaVersions.path === "string" &&
     isRecord(value.clawInstallSchemaVersions.snapshot) &&
     ((value.kind === "catalog" &&
-      (value.providerIds === undefined ||
-        (Array.isArray(value.providerIds) &&
-          value.providerIds.every((id) => typeof id === "string")))) ||
+      (value.providerIds === undefined || isStringArray(value.providerIds))) ||
       (value.kind === "auth-refresh" &&
-        Array.isArray(value.providerIds) &&
-        value.providerIds.every((providerId) => typeof providerId === "string") &&
-        (value.profileIds === undefined ||
-          (Array.isArray(value.profileIds) &&
-            value.profileIds.every((profileId) => typeof profileId === "string")))))
+        isStringArray(value.providerIds) &&
+        (value.profileIds === undefined || isStringArray(value.profileIds))))
   );
 }
 
