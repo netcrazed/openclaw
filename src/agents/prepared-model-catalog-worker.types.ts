@@ -38,7 +38,7 @@ export type PreparedModelCatalogWorkerTask = {
   request: PreparedModelWorkerRequest;
 };
 
-type PreparedModelWorkerCommand =
+export type PreparedModelWorkerCommand =
   | Readonly<{ kind: "catalog"; providerIds?: readonly string[] }>
   | Readonly<{
       kind: "auth-refresh";

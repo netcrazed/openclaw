@@ -29,22 +29,16 @@ import {
   fingerprintPreparedModelCatalogGeneration,
   fingerprintPreparedModelWorkerRequest,
 } from "./prepared-model-catalog-fingerprints.js";
-import type {
-  PreparedModelCatalogWorkerInput,
-  PreparedModelCatalogWorkerTask,
-  PreparedModelWorkerRequest,
-  PreparedModelWorkerResult,
-} from "./prepared-model-catalog-worker.contract.js";
 import {
   CatalogWorkerTaskPool,
   GATEWAY_CATALOG_WORKERS,
 } from "./prepared-model-catalog-worker.pool.js";
-export type {
+import type {
   PreparedModelCatalogWorkerInput,
   PreparedModelCatalogWorkerTask,
-  PreparedModelWorkerRequest,
+  PreparedModelWorkerCommand,
   PreparedModelWorkerResult,
-} from "./prepared-model-catalog-worker.contract.js";
+} from "./prepared-model-catalog-worker.types.js";
 import {
   PreparedModelCatalogAdmissionStalledError,
   PreparedModelCatalogGenerationMismatchError,
@@ -63,7 +57,6 @@ import {
   listRegistrySyntheticAuthProviderRefs,
   scopeSyntheticAuthProviderRefs,
 } from "./prepared-model-runtime.synthetic-auth.js";
-import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 // Parent probes, queued requests and admitted provider discovery are bounded independently.
