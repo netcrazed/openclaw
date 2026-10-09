@@ -1,7 +1,7 @@
 import { createHash, type Hash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { copyRootFileSync } from "@openclaw/fs-safe/advanced";
+import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import {
@@ -79,25 +79,41 @@ export function copyPluginSourceFile(
   return withPluginSourceFile(source, boundary, (fd) => {
     const admitted = fs.fstatSync(fd, { bigint: true });
     try {
-      // Keep our pin alive; fs-safe binds its own admitted open to this exact inode.
-      using copied = copyRootFileSync({
-        source: { rootPath: boundary, absolutePath: source },
-        destination: { rootPath: path.dirname(target), absolutePath: target },
-        expectedSourceIdentity: { dev: admitted.dev, ino: admitted.ino },
-        clone: "auto",
-        maxBytes: Number(admitted.size),
-        mode: options.preserveSourceMode
-          ? Number(admitted.mode & 0o777n)
-          : 0o600 | Number(admitted.mode & 0o100n),
-        sourceHardlinks: "allow",
-      });
-      // The initial hash belongs to the copied descriptor; receipts still recheck its path.
-      return options.hashCopiedContent
-        ? {
-            ...hashPluginSourceDescriptor(copied.fd),
-            sourceIdentity: pluginSourceStatIdentity(admitted, copied.sourceIdentity),
+      // Keep our pin alive; the opened source fd is still bound to the admitted inode while
+      // fs-safe copies descriptor-to-descriptor into a freshly-created target.
+      const mode = options.preserveSourceMode
+        ? Number(admitted.mode & 0o777n)
+        : 0o600 | Number(admitted.mode & 0o100n);
+      const targetFd = fs.openSync(
+        target,
+        fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR,
+        mode,
+      );
+      let copied = false;
+      try {
+        copyFileDescriptorSync(fd, targetFd, { maxBytes: Number(admitted.size) });
+        copied = true;
+        // The initial hash belongs to the copied descriptor; receipts still recheck its path.
+        return options.hashCopiedContent
+          ? {
+              ...hashPluginSourceDescriptor(targetFd),
+              sourceIdentity: pluginSourceStatIdentity(admitted, admitted),
+            }
+          : undefined;
+      } finally {
+        try {
+          fs.closeSync(targetFd);
+        } catch {
+          // The descriptor may have already been closed while preserving a copy failure.
+        }
+        if (!copied) {
+          try {
+            fs.rmSync(target, { force: true });
+          } catch {
+            // Best effort; the original copy failure is more useful.
           }
-        : undefined;
+        }
+      }
     } catch (error) {
       // fs-safe wraps native failures; retain the disk-full code and detail that
       // plugin-load diagnostics use to explain how to recover.

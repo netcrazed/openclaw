@@ -389,7 +389,11 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
     (pluginId) => !restrictiveAllowlistOmitsPlugin(params.config, pluginId),
   );
   const pluginIds = [...basePluginIds, ...memoryPluginIds, ...contextEnginePluginIds];
-  const forceActivatedPluginIds = [...memoryPluginIds, ...contextEnginePluginIds];
+  const forceActivatedPluginIds = [
+    ...(params.purpose === "model-catalog" ? basePluginIds : []),
+    ...memoryPluginIds,
+    ...contextEnginePluginIds,
+  ];
   if (params.purpose === "model-catalog") {
     for (const plugin of params.metadataSnapshot.plugins) {
       for (const runtime of plugin.activation?.onAgentHarnesses ?? []) {

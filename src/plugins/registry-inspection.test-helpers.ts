@@ -157,6 +157,7 @@ module.exports = {
   const config = {
     plugins: {
       allow: [id],
+      entries: { [id]: { enabled: true } },
       load: { paths: [plugin.file] },
       slots: { memory: "none", ...(options?.contextEngine ? { contextEngine: id } : {}) },
     },
@@ -200,6 +201,9 @@ export function acquireFixtureInspection(
     config: {
       plugins: {
         allow: fixtures.map((fixture) => fixture.plugin.id),
+        entries: Object.fromEntries(
+          fixtures.map((fixture) => [fixture.plugin.id, { enabled: true }]),
+        ),
         load: { paths: fixtures.map((fixture) => fixture.plugin.file) },
         slots: { memory: "none" },
       },
