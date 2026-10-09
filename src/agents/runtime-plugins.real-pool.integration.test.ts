@@ -23,12 +23,24 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 
-function writeCountingPlugin(id: string, counterFile: string) {
+const counterKeys: symbol[] = [];
+let nextCounterKey = 0;
+
+function createCounterKey(): string {
+  const counterKey = `openclaw.test.real-pool.${process.pid}.${nextCounterKey++}`;
+  const symbol = Symbol.for(counterKey);
+  counterKeys.push(symbol);
+  delete (globalThis as Record<symbol, unknown>)[symbol];
+  return counterKey;
+}
+
+function writeCountingPlugin(id: string, counterKey: string) {
   return writePlugin({
     id,
     body: `
-      const fs = require("node:fs");
-      fs.appendFileSync(${JSON.stringify(counterFile)}, ${JSON.stringify(id)} + "\\n");
+      const counterKey = Symbol.for(${JSON.stringify(counterKey)});
+      const counts = globalThis[counterKey] || (globalThis[counterKey] = Object.create(null));
+      counts[${JSON.stringify(id)}] = (counts[${JSON.stringify(id)}] || 0) + 1;
       module.exports = {
         id: ${JSON.stringify(id)},
         register(api) {
@@ -39,12 +51,12 @@ function writeCountingPlugin(id: string, counterFile: string) {
   });
 }
 
-function loadCountsFromCounterFile(counterFile: string): Record<string, number> {
-  if (!fs.existsSync(counterFile)) return {};
-  const lines = fs.readFileSync(counterFile, "utf8").split("\n").filter(Boolean);
-  const counts: Record<string, number> = {};
-  for (const line of lines) counts[line] = (counts[line] ?? 0) + 1;
-  return counts;
+function loadCountsFromCounterKey(counterKey: string): Record<string, number> {
+  return {
+    ...((globalThis as Record<symbol, Record<string, number> | undefined>)[
+      Symbol.for(counterKey)
+    ] ?? {}),
+  };
 }
 
 describe("model-catalog: real incremental registry reuse", () => {
@@ -54,14 +66,16 @@ describe("model-catalog: real incremental registry reuse", () => {
     for (const registry of registries.splice(0).toReversed()) {
       await disposePluginRegistryInstances(registry);
     }
+    for (const counterKey of counterKeys.splice(0)) {
+      delete (globalThis as Record<symbol, unknown>)[counterKey];
+    }
     resetPluginLoaderTestStateForTest();
   });
 
   it("loads plugin modules when snapshot and discovery source spellings differ", () => {
     useNoBundledPlugins();
-    const counterFile = writePlugin({ id: "counter-dir-holder", body: "module.exports = {};" }).dir;
-    const counterPath = path.join(counterFile, "counter.log");
-    const plugin = writeCountingPlugin("real-pool-source-spelling", counterPath);
+    const counterKey = createCounterKey();
+    const plugin = writeCountingPlugin("real-pool-source-spelling", counterKey);
     const aliasFile = path.join(plugin.dir, "source-spelling-alias.cjs");
     try {
       fs.symlinkSync(path.basename(plugin.file), aliasFile);
@@ -98,17 +112,16 @@ describe("model-catalog: real incremental registry reuse", () => {
     });
     registries.push(registry);
 
-    expect(loadCountsFromCounterFile(counterPath)).toEqual({ [plugin.id]: 1 });
+    expect(loadCountsFromCounterKey(counterKey)).toEqual({ [plugin.id]: 1 });
   });
 
   it("does not re-run the real load for already-loaded plugins when a superset is requested", () => {
     useNoBundledPlugins();
-    const counterFile = writePlugin({ id: "counter-dir-holder", body: "module.exports = {};" }).dir;
-    const counterPath = path.join(counterFile, "counter.log");
+    const counterKey = createCounterKey();
 
-    const pluginA = writeCountingPlugin("real-pool-a", counterPath);
-    const pluginB = writeCountingPlugin("real-pool-b", counterPath);
-    const pluginC = writeCountingPlugin("real-pool-c", counterPath);
+    const pluginA = writeCountingPlugin("real-pool-a", counterKey);
+    const pluginB = writeCountingPlugin("real-pool-b", counterKey);
+    const pluginC = writeCountingPlugin("real-pool-c", counterKey);
 
     const baseConfig = (ids: string[], files: string[]) => ({
       plugins: {
@@ -127,7 +140,7 @@ describe("model-catalog: real incremental registry reuse", () => {
       purpose: "model-catalog",
     });
     registries.push(registryAB);
-    expect(loadCountsFromCounterFile(counterPath)).toEqual({
+    expect(loadCountsFromCounterKey(counterKey)).toEqual({
       [pluginA.id]: 1,
       [pluginB.id]: 1,
     });
@@ -149,7 +162,7 @@ describe("model-catalog: real incremental registry reuse", () => {
     registries.push(registryABC);
 
     // The key assertion: A and B's real module load did NOT execute a second time; only C's did.
-    expect(loadCountsFromCounterFile(counterPath)).toEqual({
+    expect(loadCountsFromCounterKey(counterKey)).toEqual({
       [pluginA.id]: 1,
       [pluginB.id]: 1,
       [pluginC.id]: 1,
