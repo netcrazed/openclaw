@@ -114,6 +114,7 @@ const getBlockingReplacement = () =>
   pendingModelRuntimeReplacement?.degraded ? undefined : pendingModelRuntimeReplacement;
 const getAdmissionReplacement = () => modelRuntimeDrain.pending ?? getBlockingReplacement();
 const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
+  retainOwner: retainPublishedModelRuntimeOwner,
   isGatewayLifecycleActive: () => gatewayLifecycleActive,
   getConfiguredOwner: (agentId) =>
     resolveConfiguredOwner(owners, {
