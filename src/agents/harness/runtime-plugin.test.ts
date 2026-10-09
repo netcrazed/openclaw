@@ -655,7 +655,7 @@ describe("harness runtime plugins", () => {
     {
       basePluginIds: ["catalog-provider"],
       config: { plugins: { entries: { "catalog-provider": { enabled: false } } } },
-      expected: ["catalog-provider"],
+      expected: [],
       entries: { "catalog-provider": { enabled: false } },
     },
   ])(
