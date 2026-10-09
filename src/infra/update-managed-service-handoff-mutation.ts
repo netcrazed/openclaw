@@ -1,12 +1,16 @@
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
+import { managedCommandCustody } from "./update-managed-service-handoff-children.js";
 import {
   createManagedHandoffLeaseDatabase,
   leaseQueries,
 } from "./update-managed-service-handoff-database.js";
 import type { ManagedHandoffParent } from "./update-managed-service-handoff-lease-types.js";
-import type { createManagedHandoffLeaseRows } from "./update-managed-service-handoff-rows.js";
+import {
+  managedHandoffLeaseRow,
+  type createManagedHandoffLeaseRows,
+} from "./update-managed-service-handoff-rows.js";
 import { isRetiredManagedHandoffLeasePayload } from "./update-managed-service-handoff-schema.js";
 
 type Rows = ReturnType<typeof createManagedHandoffLeaseRows>;
@@ -24,10 +28,7 @@ export function createManagedHandoffMutationReader(
     const value = row(db, lease.key);
     return Boolean(
       value &&
-      sameRow(
-        { owner: lease.owner, payload_json: lease.payload, updated_at: lease.updatedAt },
-        value,
-      ) &&
+      sameRow(managedHandoffLeaseRow(lease), value) &&
       isDeepStrictEqual(handle(lease.key, value), lease),
     );
   }
@@ -36,18 +37,23 @@ export function createManagedHandoffMutationReader(
       return true;
     }
     const original = lease.mutationOriginal;
-    return sameRow(
-      { owner: original.owner, payload_json: original.payload, updated_at: original.updatedAt },
-      row(db, original.key),
-    );
+    return sameRow(managedHandoffLeaseRow(original), row(db, original.key));
   }
-  function ancestorsAllowMutation(key: string, db: HandoffDatabase): boolean {
+  function ancestorsAllowMutation(
+    key: string,
+    db: HandoffDatabase,
+    orphanCommand = false,
+  ): boolean {
     let marker = key.indexOf("/.openclaw-update-child-");
     while (marker >= 0) {
       const ancestorKey = key.slice(0, marker);
       const ancestor = row(db, ancestorKey);
       if (!ancestor) {
-        return false;
+        if (!orphanCommand) {
+          return false;
+        }
+        marker = key.indexOf("/.openclaw-update-child-", marker + 1);
+        continue;
       }
       if (!isRetiredManagedHandoffLeasePayload(ancestor.payload_json)) {
         const lease = handle(ancestorKey, ancestor);
@@ -63,7 +69,7 @@ export function createManagedHandoffMutationReader(
     const marker = "/.openclaw-update-child-";
     const index = key.lastIndexOf(marker);
     const childName = index < 0 ? "" : key.slice(index + marker.length);
-    if (!/^[a-f0-9-]{36}-lineage-[a-f0-9]{64}$/.test(childName)) {
+    if (!/^[a-f0-9-]{36}-(?:lineage-[a-f0-9]{64}|command)$/.test(childName)) {
       return [];
     }
     // Mirrors keep the exact recorded child name. Its restricted alphabet has
@@ -81,11 +87,15 @@ export function createManagedHandoffMutationReader(
       lease.version === 4 ||
       !storedCurrent(lease, db) ||
       !originalAllowsMutation(lease, db) ||
-      !ancestorsAllowMutation(lease.key, db)
+      !ancestorsAllowMutation(lease.key, db, Boolean(managedCommandCustody(lease)))
     ) {
       return false;
     }
-    if (childAliases(lease.key, db).some((key) => !ancestorsAllowMutation(key, db))) {
+    if (
+      childAliases(lease.key, db).some(
+        (key) => !ancestorsAllowMutation(key, db, Boolean(managedCommandCustody(lease))),
+      )
+    ) {
       return false;
     }
     return true;
